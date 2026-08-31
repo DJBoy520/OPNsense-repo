@@ -1,11 +1,36 @@
 <acl>
-    <page-vpn-mihomo>
-        <name>VPN: Proxy Suite: Mihomo</name>
+    <page-services-mihomo>
+        <name>Services: Mihomo</name>
         <patterns>
-            <pattern>mihomo.php*</pattern>
-            <pattern>mihomo_logs.php*</pattern>
-            <pattern>mihomo_sub.php*</pattern>
-            <pattern>mihomo_sub_log.php*</pattern>
+            <pattern>ui/mihomo/*</pattern>
+            <pattern>api/mihomo/*</pattern>
         </patterns>
-    </page-vpn-mihomo>
+    </page-services-mihomo>
+    <page-services-mihomo-general>
+        <name>Services: Mihomo: General</name>
+        <patterns>
+            <pattern>ui/mihomo/index*</pattern>
+            <pattern>api/mihomo/general/*</pattern>
+        </patterns>
+    </page-services-mihomo-general>
+    <page-services-mihomo-status>
+        <name>Services: Mihomo: Status</name>
+        <patterns>
+            <pattern>ui/mihomo/status*</pattern>
+            <pattern>api/mihomo/status/*</pattern>
+        </patterns>
+    </page-services-mihomo-status>
+    <page-services-mihomo-logs>
+        <name>Services: Mihomo: Logs</name>
+        <patterns>
+            <pattern>ui/mihomo/logs*</pattern>
+            <pattern>api/mihomo/logs/*</pattern>
+        </patterns>
+    </page-services-mihomo-logs>
+    <page-services-mihomo-service>
+        <name>Services: Mihomo: Service</name>
+        <patterns>
+            <pattern>api/mihomo/service/*</pattern>
+        </patterns>
+    </page-services-mihomo-service>
 </acl>

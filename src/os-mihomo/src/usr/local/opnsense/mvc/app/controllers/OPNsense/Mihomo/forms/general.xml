@@ -1,0 +1,20 @@
+<form>
+    <field>
+        <id>mihomo.general.enabled</id>
+        <label>Enable Mihomo</label>
+        <type>checkbox</type>
+        <help>Enable or disable the Mihomo service.</help>
+    </field>
+    <field>
+        <id>mihomo.general.log_level</id>
+        <label>Log Level</label>
+        <type>dropdown</type>
+        <help>Select the logging level for Mihomo (debug, info, warning, error, silent).</help>
+    </field>
+    <field>
+        <id>mihomo.general.lan_api</id>
+        <label>Allow LAN API Access</label>
+        <type>checkbox</type>
+        <help>Allow dashboard and external controller access from LAN interfaces.</help>
+    </field>
+</form>

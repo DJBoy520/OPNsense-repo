@@ -1,0 +1,28 @@
+<model>
+    <mount>//OPNsense/mihomo</mount>
+    <version>1.0.0</version>
+    <description>Mihomo proxy configuration</description>
+    <items>
+        <general>
+            <enabled type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </enabled>
+            <log_level type="OptionField">
+                <default>info</default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <debug>Debug</debug>
+                    <info>Info</info>
+                    <warning>Warning</warning>
+                    <error>Error</error>
+                    <silent>Silent</silent>
+                </OptionValues>
+            </log_level>
+            <lan_api type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </lan_api>
+        </general>
+    </items>
+</model>

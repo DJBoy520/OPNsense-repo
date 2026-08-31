@@ -1,8 +1,9 @@
 <menu>
-    <VPN>
-        <ProxySuite VisibleName="Proxy Suite" cssClass="fa fa-lock fa-fw">
-            <Mihomo VisibleName="Mihomo" order="10" url="/mihomo.php"/>
-            <MihomoSubscribe VisibleName="Mihomo Subscribe" order="20" url="/mihomo_sub.php"/>
-        </ProxySuite>
-    </VPN>
+    <Services>
+        <Mihomo VisibleName="Mihomo" cssClass="fa fa-globe fa-fw">
+            <General VisibleName="General" order="10" url="/ui/mihomo/"/>
+            <Status VisibleName="Status" order="20" url="/ui/mihomo/status"/>
+            <Logs VisibleName="Logs" order="30" url="/ui/mihomo/logs"/>
+        </Mihomo>
+    </Services>
 </menu>
