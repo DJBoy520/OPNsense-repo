@@ -1,5 +1,5 @@
 #!/bin/sh
-# 在线订阅转换脚本
+# 订阅拉取与配置更新脚本
 
 #################### 初始化 ####################
 Server_Dir=$(cd "$(dirname "$0")" && pwd)
@@ -9,20 +9,13 @@ ENV_MIHOMO_SECRET="${mihomo_secret:-}"
 [ -n "$ENV_MIHOMO_URL" ] && mihomo_URL="$ENV_MIHOMO_URL"
 [ -n "$ENV_MIHOMO_SECRET" ] && mihomo_secret="$ENV_MIHOMO_SECRET"
 
-API_BASE="https://subconverters.com/sub"
-CURL_TLS_ARGS=""
-[ "${INSECURE_TLS:-0}" = "1" ] && CURL_TLS_ARGS="-k"
-
 Conf_Dir="${MIHOMO_CONF_DIR:-$(cd "$Server_Dir/.." && pwd)}"
 Temp_Dir="${MIHOMO_TEMP_DIR:-$Server_Dir/temp}"
 Clash_Dir="${MIHOMO_DIR:-/usr/local/etc/mihomo}"
-FORMAL_CONFIG="${MIHOMO_FORMAL_CONFIG:-$Clash_Dir/config.yaml}"
-MIHOMO_BIN="${MIHOMO_BIN:-/usr/local/bin/mihomo}"
-MIHOMO_SERVICE_CMD="${MIHOMO_SERVICE_CMD:-service mihomo restart}"
+ATOMIC_UPDATER="${MIHOMO_ATOMIC_UPDATER:-/usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh}"
+SECRET_MANAGER="${MIHOMO_SECRET_MANAGER:-/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh}"
 LOCK_DIR="${MIHOMO_LOCK_DIR:-/var/run/mihomo-sub.lock}"
 LOCK_HELD=0
-BACKUP_CONFIG=""
-FORMAL_TMP=""
 TMP_RAW=""
 TMP_PROXIES=""
 TMP_NAMES=""
@@ -30,7 +23,7 @@ TMP_FINAL=""
 mkdir -p "$Conf_Dir" "$Temp_Dir"
 
 command -v jq >/dev/null 2>&1 || {
-  echo "缺少 jq 命令，请先安装（用于 URL 编码）"
+  echo "缺少 jq 命令，请先安装"
   exit 1
 }
 command -v curl >/dev/null 2>&1 || {
@@ -47,7 +40,6 @@ cleanup_tmp_files() {
     [ -n "$TMP_PROXIES" ] && rm -f "$TMP_PROXIES"
     [ -n "$TMP_NAMES" ] && rm -f "$TMP_NAMES"
     [ -n "$TMP_FINAL" ] && rm -f "$TMP_FINAL"
-    [ -n "$FORMAL_TMP" ] && rm -f "$FORMAL_TMP"
     rm -f "$Conf_Dir/config.clean.yaml" "$Conf_Dir/config.new.yaml"
     [ "$LOCK_HELD" = "1" ] && rm -f "$LOCK_DIR/pid" 2>/dev/null || true
     [ "$LOCK_HELD" = "1" ] && rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -79,7 +71,25 @@ case "$URL_SCHEME_CHECK" in
 esac
 
 # 安全密钥
-Secret=${mihomo_secret:-$(openssl rand -hex 32)}
+if [ -n "$mihomo_secret" ]; then
+    Secret="$mihomo_secret"
+elif [ -x "$SECRET_MANAGER" ]; then
+    Secret="$("$SECRET_MANAGER" get 2>/dev/null || true)"
+fi
+[ -z "$Secret" ] && Secret=$(openssl rand -hex 32)
+
+# URL 脱敏函数（隐藏 query 参数及 token）
+mask_url() {
+    raw_url="$1"
+    scheme=$(printf "%s" "$raw_url" | sed -n 's/^\([a-zA-Z][a-zA-Z0-9+.-]*:\/\/\).*/\1/p')
+    rest=$(printf "%s" "$raw_url" | sed 's/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\///')
+    host_path=$(printf "%s" "$rest" | cut -d'?' -f1 | cut -d'#' -f1)
+    if [ "$rest" != "$host_path" ]; then
+        echo "${scheme}${host_path}?***"
+    else
+        echo "${scheme}${host_path}"
+    fi
+}
 
 #################### 预清理临时文件 ####################
 find "$Temp_Dir" -type f -exec rm -f {} \; 2>/dev/null
@@ -102,18 +112,27 @@ TMP_FINAL=$(mktemp "$Temp_Dir/config.XXXXXX") || {
 }
 
 #################### 下载配置 ####################
-ENCODED_URL=$(printf "%s" "$mihomo_URL" | jq -s -R -r @uri)
-API_URL="${API_BASE}?target=clash&url=${ENCODED_URL}&udp=true&clash.dns=true&list=false"
+# 如果配置了私有 CUSTOM_SUBCONVERTER 则使用自建 subconverter 进行转换，否则直接下载原生 Clash/Mihomo YAML 订阅
+if [ -n "${CUSTOM_SUBCONVERTER:-}" ]; then
+    ENCODED_URL=$(printf "%s" "$mihomo_URL" | jq -s -R -r @uri)
+    API_URL="${CUSTOM_SUBCONVERTER}?target=clash&url=${ENCODED_URL}&udp=true&clash.dns=true&list=false"
+    TARGET_URL="$API_URL"
+    DISPLAY_URL="$(mask_url "$CUSTOM_SUBCONVERTER") [custom subconverter]"
+else
+    TARGET_URL="$mihomo_URL"
+    DISPLAY_URL="$(mask_url "$mihomo_URL")"
+fi
+
 echo ""
-echo "尝试不使用代理从：$API_URL 下载配置..."
-if curl -fL $CURL_TLS_ARGS -sS --retry 3 -m 15 -o "$TMP_RAW" "$API_URL"; then
+echo "尝试不使用代理从：$DISPLAY_URL 下载配置..."
+if curl -fSL -sS --retry 3 -m 15 -o "$TMP_RAW" "$TARGET_URL"; then
     echo "下载成功：$TMP_RAW"
 else
     echo "下载失败，尝试通过 SOCKS5 代理 127.0.0.1:7891 下载配置..."
-    if curl -fL $CURL_TLS_ARGS -sS --retry 2 -m 15 --socks5-hostname 127.0.0.1:7891 -o "$TMP_RAW" "$API_URL"; then
+    if curl -fSL -sS --retry 2 -m 15 --socks5-hostname 127.0.0.1:7891 -o "$TMP_RAW" "$TARGET_URL"; then
         echo "下载成功：$TMP_RAW"
     else
-        echo "下载失败：$API_URL"
+        echo "下载失败：$DISPLAY_URL"
         echo "请检查网络连接或 mihomo 是否运行并监听 127.0.0.1:7891"
         exit 2
     fi
@@ -129,15 +148,11 @@ echo "下载文件大小: ${RAW_SIZE} 字节"
 
 if head -n 20 "$TMP_RAW" | grep -Eiq '^(<!doctype html|<html|<head|<body)'; then
     echo "检测到返回内容为 HTML 页面，订阅可能失效或被拦截。"
-    echo "前 20 行内容如下："
-    head -n 20 "$TMP_RAW"
     exit 1
 fi
 
 if ! grep -Eq '^[[:space:]]*proxies[[:space:]]*:' "$TMP_RAW"; then
     echo "下载结果缺少 proxies: 节点，订阅内容可能无效。"
-    echo "前 20 行内容如下："
-    head -n 20 "$TMP_RAW"
     exit 1
 fi
 echo ""
@@ -269,7 +284,7 @@ cp "$TMP_FINAL" "$Conf_Dir/config.yaml" || {
 awk '!/^[[:space:]]*secret[[:space:]]*:/ { print }' "$Conf_Dir/config.yaml" > "$Conf_Dir/config.clean.yaml" && mv "$Conf_Dir/config.clean.yaml" "$Conf_Dir/config.yaml"
 
 if grep -q '^external-ui:' "$Conf_Dir/config.yaml"; then
-    awk -v secret="secret: ${Secret}" '
+    awk -v secret="secret: \"${Secret}\"" '
       /^external-ui:/ {
           print;
           print secret;
@@ -278,71 +293,30 @@ if grep -q '^external-ui:' "$Conf_Dir/config.yaml"; then
       { print }
     ' "$Conf_Dir/config.yaml" > "$Conf_Dir/config.new.yaml" && mv "$Conf_Dir/config.new.yaml" "$Conf_Dir/config.yaml"
 else
-    echo "secret: ${Secret}" >> "$Conf_Dir/config.yaml"
+    echo "secret: \"${Secret}\"" >> "$Conf_Dir/config.yaml"
 fi
+chmod 600 "$Conf_Dir/config.yaml" 2>/dev/null || true
 echo "合成完成!"
 echo ""
 
-#################### 应用配置并重启 ####################
+#################### 原子应用配置并重启 ####################
 if [ ! -s "$Conf_Dir/config.yaml" ]; then
     echo "目标配置文件为空，停止应用。"
     exit 1
 fi
 
-echo "校验配置..."
-sleep 1
-if "$MIHOMO_BIN" -d "$Clash_Dir" -t -f "$Conf_Dir/config.yaml" >/dev/null 2>&1; then
-    echo "配置校验通过"
-else
-    echo "配置校验失败，未覆盖正式配置。"
-    exit 1
-fi
-
-echo "替换配置..."
-sleep 1
-if [ -f "$FORMAL_CONFIG" ]; then
-    BACKUP_CONFIG="${FORMAL_CONFIG}.bak.sub_$(date +%Y%m%d_%H%M%S)"
-    cp "$FORMAL_CONFIG" "$BACKUP_CONFIG" || {
-        echo "备份正式配置失败：$FORMAL_CONFIG"
+echo "应用配置..."
+if [ -x "$ATOMIC_UPDATER" ]; then
+    if ! "$ATOMIC_UPDATER" "$Conf_Dir/config.yaml" reload; then
+        echo "原子更新配置失败！"
         exit 1
-    }
-    echo "正式配置已备份：$BACKUP_CONFIG"
-fi
-
-FORMAL_TMP=$(mktemp "$Temp_Dir/config.formal.XXXXXX") || {
-    echo "创建正式配置临时文件失败。"
-    exit 1
-}
-cp "$Conf_Dir/config.yaml" "$FORMAL_TMP" || {
-    echo "写入正式配置临时文件失败：$FORMAL_TMP"
-    exit 1
-}
-mv "$FORMAL_TMP" "$FORMAL_CONFIG" || {
-    echo "替换正式配置失败：$FORMAL_CONFIG"
-    exit 1
-}
-chmod 600 "$FORMAL_CONFIG" 2>/dev/null || true
-FORMAL_TMP=""
-echo "重启服务..."
-if ! sh -c "$MIHOMO_SERVICE_CMD" >/dev/null 2>&1; then
-    echo "重启失败，开始回滚正式配置。"
-    if [ -n "$BACKUP_CONFIG" ] && [ -s "$BACKUP_CONFIG" ]; then
-        cp "$BACKUP_CONFIG" "$FORMAL_CONFIG" || {
-            echo "回滚失败，请手动恢复：$BACKUP_CONFIG"
-            exit 1
-        }
-        if sh -c "$MIHOMO_SERVICE_CMD" >/dev/null 2>&1; then
-            echo "已回滚到旧配置并恢复 mihomo 服务。"
-        else
-            echo "已回滚旧配置，但 mihomo 服务仍启动失败，请手动检查。"
-        fi
-    else
-        echo "未找到可用备份，无法自动回滚。"
     fi
+else
+    echo "错误：未找到原子更新脚本 $ATOMIC_UPDATER"
     exit 1
 fi
-echo "重启完成！"
 echo ""
+
 #################### 输出仪表盘信息 ####################
 sleep 1
 # 优先获取防火墙的 LAN，其次 OPT1，最后回退到私网地址
@@ -395,8 +369,18 @@ else
   echo "仪表盘访问地址: 未能自动获取 LAN/OPT1 地址"
 fi
 
-echo "仪表盘访问密钥: ${Secret}"
+if [ -x "$SECRET_MANAGER" ]; then
+    MASKED_SECRET="$("$SECRET_MANAGER" masked 2>/dev/null || true)"
+    if [ -n "$MASKED_SECRET" ]; then
+        echo "仪表盘访问密钥: ${MASKED_SECRET}"
+    else
+        echo "仪表盘访问密钥: 已配置"
+    fi
+else
+    echo "仪表盘访问密钥: 已配置"
+fi
 echo ""
 
 #################### 清理临时文件 ####################
 cleanup_tmp_files
+

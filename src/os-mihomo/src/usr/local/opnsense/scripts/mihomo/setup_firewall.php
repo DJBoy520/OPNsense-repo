@@ -4,6 +4,7 @@
 const CONFIG_FILE = '/conf/config.xml';
 const TUN_DEVICE = 'tun_mihomo';
 const RULE_UUID = '5a73c3dc-69b1-4e15-89cb-b542aa2c1154';
+const ANCHOR_NAME = 'mihomo';
 
 function childElement(DOMDocument $doc, DOMElement $parent, string $name, string $value = ''): DOMElement
 {
@@ -27,11 +28,51 @@ function setChild(DOMDocument $doc, DOMElement $parent, string $name, string $va
 }
 
 $mode = $argv[1] ?? '';
-if (!in_array($mode, ['install', 'uninstall'], true)) {
-    fwrite(STDERR, "usage: setup_firewall.php install|uninstall\n");
+if (!in_array($mode, ['install', 'uninstall', 'apply_rules', 'flush_rules'], true)) {
+    fwrite(STDERR, "usage: setup_firewall.php install|uninstall|apply_rules|flush_rules\n");
     exit(64);
 }
 
+// 1. Flush anchor rules
+if ($mode === 'flush_rules') {
+    exec('/sbin/pfctl -a ' . escapeshellarg(ANCHOR_NAME) . ' -F all 2>/dev/null', $out, $ret);
+    echo "Flushed PF rules in anchor " . ANCHOR_NAME . "\n";
+    exit(0);
+}
+
+// 2. Apply isolated PF anchor rules
+if ($mode === 'apply_rules') {
+    $rules = <<<EOF
+table <rfc1918> const { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+# Protect local API: localhost only
+pass in quick on lo0 proto tcp from 127.0.0.1 to 127.0.0.1 port 9090 keep state
+block in quick proto tcp to 127.0.0.1 port 9090
+# Pass TUN interface traffic
+pass in quick on tun_mihomo all keep state
+pass out quick on tun_mihomo all keep state
+EOF;
+
+    $descriptors = [
+        0 => ["pipe", "r"],
+        1 => ["pipe", "w"],
+        2 => ["pipe", "w"]
+    ];
+    $process = proc_open('/sbin/pfctl -a ' . escapeshellarg(ANCHOR_NAME) . ' -f -', $descriptors, $pipes);
+    if (is_resource($process)) {
+        fwrite($pipes[0], $rules);
+        fclose($pipes[0]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        proc_close($process);
+        echo "Applied isolated rules to anchor " . ANCHOR_NAME . "\n";
+        exit(0);
+    } else {
+        fwrite(STDERR, "failed to load pf anchor rules\n");
+        exit(1);
+    }
+}
+
+// 3. Install/Uninstall config.xml modification
 $lock = fopen('/var/run/os-mihomo-firewall.lock', 'c');
 if ($lock === false || !flock($lock, LOCK_EX)) {
     fwrite(STDERR, "unable to lock firewall configuration\n");
@@ -47,7 +88,7 @@ if (!file_exists(CONFIG_FILE) || !$doc->load(CONFIG_FILE)) {
 $xpath = new DOMXPath($doc);
 
 if ($mode === 'install') {
-    // 1. Check or add interface
+    // Check or add interface
     $interfacesNode = $xpath->query('/opnsense/interfaces')->item(0);
     if (!$interfacesNode instanceof DOMElement) {
         fwrite(STDERR, "interfaces node not found\n");
@@ -83,7 +124,7 @@ if ($mode === 'install') {
         $interfacesNode->appendChild($newIfNode);
     }
 
-    // 2. Check or add filter rule
+    // Check or add filter rule
     $filterNode = $xpath->query('/opnsense/filter')->item(0);
     if (!$filterNode instanceof DOMElement) {
         $opnNode = $xpath->query('/opnsense')->item(0);
@@ -112,7 +153,6 @@ if ($mode === 'install') {
 
             setChild($doc, $ruleNode, 'descr', 'Mihomo TUN Allow');
 
-            // Insert rule at top or append
             if ($filterNode->firstChild) {
                 $filterNode->insertBefore($ruleNode, $filterNode->firstChild);
             } else {
@@ -122,19 +162,16 @@ if ($mode === 'install') {
     }
 } else {
     // Mode: uninstall
-    // 1. Remove interface
     $ifNodes = $xpath->query('/opnsense/interfaces/*[if="' . TUN_DEVICE . '"]');
     foreach (iterator_to_array($ifNodes) as $node) {
         $node->parentNode->removeChild($node);
     }
 
-    // 2. Remove rule
     $ruleNodes = $xpath->query('/opnsense/filter/rule[@uuid="' . RULE_UUID . '"]');
     foreach (iterator_to_array($ruleNodes) as $node) {
         $node->parentNode->removeChild($node);
     }
 
-    // 3. Remove legacy cron items if any
     $cronItems = $xpath->query('/opnsense/cron/item');
     foreach (iterator_to_array($cronItems) as $item) {
         $commandNode = $xpath->query('./command', $item)->item(0);
@@ -147,6 +184,9 @@ if ($mode === 'install') {
             $item->parentNode->removeChild($item);
         }
     }
+
+    // Flush anchor rules on uninstall
+    exec('/sbin/pfctl -a ' . escapeshellarg(ANCHOR_NAME) . ' -F all 2>/dev/null', $out, $ret);
 }
 
 $backup = CONFIG_FILE . '.bak.os-mihomo-fw-' . date('Ymd-His');

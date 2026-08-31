@@ -29,8 +29,8 @@ function setChild(DOMDocument $doc, DOMElement $parent, string $name, string $va
 }
 
 $mode = $argv[1] ?? '';
-if (!in_array($mode, ['install', 'uninstall'], true)) {
-    fwrite(STDERR, "usage: setup_unbound.php install|uninstall\n");
+if (!in_array($mode, ['install', 'uninstall', 'bypass', 'restore'], true)) {
+    fwrite(STDERR, "usage: setup_unbound.php install|uninstall|bypass|restore\n");
     exit(64);
 }
 
@@ -42,7 +42,7 @@ if ($lock === false || !flock($lock, LOCK_EX)) {
 
 $doc = new DOMDocument();
 $doc->preserveWhiteSpace = true;
-if (!$doc->load(CONFIG_FILE)) {
+if (!file_exists(CONFIG_FILE) || !$doc->load(CONFIG_FILE)) {
     fwrite(STDERR, "unable to read " . CONFIG_FILE . "\n");
     exit(1);
 }
@@ -61,7 +61,7 @@ if (!$forwarding instanceof DOMElement || !$privateAddress instanceof DOMElement
     exit(1);
 }
 
-if ($mode === 'install') {
+if ($mode === 'install' || $mode === 'restore') {
     if (!is_dir(STATE_DIR)) {
         mkdir(STATE_DIR, 0700, true);
     }
@@ -96,7 +96,17 @@ if ($mode === 'install') {
     setChild($doc, $dot, 'forward_tcp_upstream', '0');
     setChild($doc, $dot, 'forward_first', '0');
     setChild($doc, $dot, 'description', 'Mihomo DNS forwarding');
+} elseif ($mode === 'bypass') {
+    // Fail-Open mode: disable/remove forwarder to 1053 and restore standard DNS upstream
+    foreach (iterator_to_array($xpath->query('./dot[@uuid="' . FORWARD_UUID . '"]', $dots)) as $dot) {
+        $dots->removeChild($dot);
+    }
+    $state = file_exists(STATE_FILE) ? json_decode((string)file_get_contents(STATE_FILE), true) : null;
+    if (is_array($state)) {
+        $forwarding->nodeValue = (string)($state['forwarding_enabled'] ?? '0');
+    }
 } else {
+    // Mode: uninstall
     foreach (iterator_to_array($xpath->query('./dot[@uuid="' . FORWARD_UUID . '"]', $dots)) as $dot) {
         $dots->removeChild($dot);
     }
