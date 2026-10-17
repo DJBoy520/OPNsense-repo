@@ -11,22 +11,38 @@ PREFIX="${PREFIX:-/usr/local}"
 FORMAT="${FORMAT:-tgz}"
 ABI="${ABI:-universal}"
 OUTPUT_NAME="${OUTPUT_NAME:-${PKG_NAME}.pkg}"
-MIHOMO_ASSET="${MIHOMO_ASSET:-clash-meta-freebsd-amd64.xz}"
-MIHOMO_DOWNLOAD_URL="${MIHOMO_DOWNLOAD_URL:-https://github.com/Vincent-Loeng/clash-meta/releases/latest/download/$MIHOMO_ASSET}"
 DOWNLOAD_TIMEOUT="${DOWNLOAD_TIMEOUT:-300}"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+# 供应链版本锁定：与仓库根构建脚本共用 build/mihomo-version.env
+MIHOMO_VERSION_ENV="$SCRIPT_DIR/build/mihomo-version.env"
+[ -f "$MIHOMO_VERSION_ENV" ] || die "missing required file: build/mihomo-version.env"
+
+# 环境变量优先于锁定文件，便于临时切换镜像/版本
+MIHOMO_ASSET_OVERRIDE="${MIHOMO_ASSET:-}"
+MIHOMO_DOWNLOAD_URL_OVERRIDE="${MIHOMO_DOWNLOAD_URL:-}"
+
+# shellcheck source=/dev/null
+. "$MIHOMO_VERSION_ENV"
+
+MIHOMO_ASSET="${MIHOMO_ASSET_OVERRIDE:-${MIHOMO_ASSET:-}}"
+MIHOMO_DOWNLOAD_URL="${MIHOMO_DOWNLOAD_URL_OVERRIDE:-${MIHOMO_URL:-}}"
+
+[ -n "$MIHOMO_ASSET" ] || die "MIHOMO_ASSET not specified in $MIHOMO_VERSION_ENV"
+[ -n "$MIHOMO_DOWNLOAD_URL" ] || die "MIHOMO_URL not specified in $MIHOMO_VERSION_ENV"
+
 WORKDIR="${WORKDIR:-"$SCRIPT_DIR/work/freebsd-pkg"}"
 STAGEDIR="$WORKDIR/stage"
 METADIR="$WORKDIR/meta"
 PLIST="$WORKDIR/pkg-plist"
 DISTDIR="${DISTDIR:-"$SCRIPT_DIR/dist"}"
 DOWNLOADDIR="$WORKDIR/downloads"
-
-die() {
-    echo "error: $*" >&2
-    exit 1
-}
 
 need_file() {
     [ -e "$SCRIPT_DIR/$1" ] || die "missing required file: $1"
@@ -67,7 +83,6 @@ need_file "src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/index.volt"
 need_file "src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/status.volt"
 need_file "src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/logs.volt"
 need_file "src/usr/bin/mihomo_sub"
-need_file "src/usr/local/bin/$MIHOMO_ASSET"
 need_file "packaging/freebsd/+MANIFEST.in"
 need_file "packaging/freebsd/+POST_INSTALL"
 need_file "packaging/freebsd/+PRE_DEINSTALL"
@@ -125,7 +140,9 @@ unpack_binary() {
     tmp="$binary_dst.tmp"
 
     rm -f "$tmp" "$binary_dst"
-    if xz -t "$archive" >/dev/null 2>&1; then
+    if gzip -t "$archive" >/dev/null 2>&1; then
+        gzip -dc "$archive" > "$tmp"
+    elif xz -t "$archive" >/dev/null 2>&1; then
         xz -dc "$archive" > "$tmp"
     else
         cp "$archive" "$tmp"

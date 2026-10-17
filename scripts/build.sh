@@ -114,6 +114,45 @@ chmod 0755 "$STAGE_DIR/usr/local/bin/mihomo"
 
 MIHOMO_FINAL_SHA256="$(calc_sha256 "$STAGE_DIR/usr/local/bin/mihomo")"
 
+# 4b. Install pinned zashboard dashboard UI (bundled; no runtime download)
+[ -n "${ZASHBOARD_VERSION:-}" ] || die "ZASHBOARD_VERSION not specified in $VERSION_ENV"
+[ -n "${ZASHBOARD_URL:-}" ] || die "ZASHBOARD_URL not specified in $VERSION_ENV"
+[ -n "${ZASHBOARD_SHA256:-}" ] || die "ZASHBOARD_SHA256 not specified in $VERSION_ENV"
+
+ZASH_CACHE="$CACHE_DIR/zashboard-${ZASHBOARD_VERSION}.zip"
+ZASH_STAGE="$STAGE_DIR/usr/local/etc/mihomo/ui"
+
+if [ ! -f "$ZASH_CACHE" ]; then
+    command -v curl >/dev/null 2>&1 || die "curl command not found (required to download zashboard)"
+    echo "==> Downloading zashboard $ZASHBOARD_VERSION"
+    curl -fSL --retry 3 --connect-timeout 30 -o "$ZASH_CACHE" "$ZASHBOARD_URL"
+fi
+
+ZASH_ACTUAL="$(calc_sha256 "$ZASH_CACHE")"
+if [ "$ZASH_ACTUAL" != "$ZASHBOARD_SHA256" ]; then
+    die "zashboard SHA256 mismatch! expected: $ZASHBOARD_SHA256 got: $ZASH_ACTUAL"
+fi
+
+echo "==> Staging zashboard $ZASHBOARD_VERSION (SHA256 verified)"
+command -v python3 >/dev/null 2>&1 || die "python3 command not found (required to extract zashboard zip)"
+ZASH_TMP="$WORK_DIR/zashboard-unzip"
+rm -rf "$ZASH_TMP"
+mkdir -p "$ZASH_TMP" "$ZASH_STAGE"
+python3 -m zipfile -e "$ZASH_CACHE" "$ZASH_TMP"
+if [ -d "$ZASH_TMP/dist" ]; then
+    # 官方 dist.zip 顶层为 dist/，只平移其内容
+    cp -a "$ZASH_TMP/dist/." "$ZASH_STAGE/"
+else
+    echo "==> WARNING: zashboard zip has no top-level dist/; staging archive root"
+    cp -a "$ZASH_TMP/." "$ZASH_STAGE/"
+fi
+find "$ZASH_STAGE" -type d -exec chmod 0755 {} +
+find "$ZASH_STAGE" -type f -exec chmod 0644 {} +
+
+ZASH_FILE_COUNT="$(find "$ZASH_STAGE" -type f | wc -l | tr -d ' ')"
+[ "$ZASH_FILE_COUNT" -gt 0 ] || die "staged zashboard UI is empty"
+echo "==> Staged $ZASH_FILE_COUNT zashboard files in usr/local/etc/mihomo/ui"
+
 # 5. Set executable permissions
 [ -f "$STAGE_DIR/usr/local/etc/mihomo/sub/sub.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/etc/mihomo/sub/sub.sh"
 [ -f "$STAGE_DIR/usr/bin/mihomo_sub" ] && chmod 0755 "$STAGE_DIR/usr/bin/mihomo_sub"
@@ -204,17 +243,16 @@ TARLIST="$WORK_DIR/pkg-tarlist"
 } > "$TARLIST"
 
 if tar --version 2>&1 | grep -q 'GNU'; then
+    # 内容文件带前导 /；+MANIFEST/+COMPACT_MANIFEST 必须保持裸名（pkg 只认根上的裸名清单）
     tar -czf "$OUTPUT_PKG" \
         -C "$PKG_ROOT" \
-        --transform='s,^,/,g' \
+        --transform='s,^\([^+]\),/\1,' \
         -T "$TARLIST"
 else
     tar -cPzf "$OUTPUT_PKG" \
         -C "$PKG_ROOT" \
         -s ',^etc,/etc,' \
         -s ',^usr,/usr,' \
-        -s ',^+MANIFEST,/\+MANIFEST,' \
-        -s ',^+COMPACT_MANIFEST,/\+COMPACT_MANIFEST,' \
         -T "$TARLIST"
 fi
 

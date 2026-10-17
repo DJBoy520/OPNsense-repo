@@ -53,12 +53,29 @@ if (!$unbound instanceof DOMElement) {
     exit(1);
 }
 
+// 兼容从未配置过 DoT/转发项的系统：缺失节点就地补齐，而不是 exit 1 中断安装
+foreach (['forwarding', 'advanced', 'dots'] as $missing) {
+    if (!$xpath->query('./' . $missing, $unbound)->item(0) instanceof DOMElement) {
+        $unbound->appendChild($doc->createElement($missing));
+    }
+}
+
 $forwarding = $xpath->query('./forwarding/enabled', $unbound)->item(0);
+if (!$forwarding instanceof DOMElement) {
+    $parent = $xpath->query('./forwarding', $unbound)->item(0);
+    $forwarding = childElement($doc, $parent, 'enabled', '0');
+}
+
 $privateAddress = $xpath->query('./advanced/privateaddress', $unbound)->item(0);
+if (!$privateAddress instanceof DOMElement) {
+    $parent = $xpath->query('./advanced', $unbound)->item(0);
+    $privateAddress = childElement($doc, $parent, 'privateaddress', '');
+}
+
 $dots = $xpath->query('./dots', $unbound)->item(0);
-if (!$forwarding instanceof DOMElement || !$privateAddress instanceof DOMElement || !$dots instanceof DOMElement) {
-    fwrite(STDERR, "OPNsense Unbound model is incomplete\n");
-    exit(1);
+if (!$dots instanceof DOMElement) {
+    $dots = $doc->createElement('dots');
+    $unbound->appendChild($dots);
 }
 
 if ($mode === 'install' || $mode === 'restore') {

@@ -1,10 +1,10 @@
 {
-  "plugin_version": "1.0.2",
+  "plugin_version": "1.0.4",
   "mihomo_version": "v1.19.30",
-  "mihomo_commit": "ac017cd",
+  "mihomo_commit": "",
   "mihomo_sha256": "a661c8e99ce41a5a6e16df2a9eb9b8278f8c5ba5a54418be45fffcde8884d26c",
   "target_os": "FreeBSD",
   "target_arch": "amd64",
   "build_environment": "Ubuntu/Linux (Cross-Package)",
-  "source_commit": "092fe2df4db3b524c7f51820789df2c1d2824e77"
+  "source_commit": "d92bf35d28d476627fe7ba743011bbcf55225cbe"
 }

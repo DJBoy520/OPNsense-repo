@@ -1,60 +1,56 @@
 #!/bin/sh
 
-CONFIG_FILE="/conf/config.xml"
+# os-mihomo post-install (socks-core mode)
+# 本模式不写 /conf/config.xml、不改 Unbound、不改 PF 主规则集；
+# 透明代理传输层（hev-socks5-tunnel + PF route-to anchor）由既有体系承担。
+# 注意：本脚本整体内嵌进 +MANIFEST 由 pkg 执行，manifest 字符串会破坏反斜杠续行，禁止使用。
 
-echo "===> Configuring os-mihomo"
+echo "===> Configuring os-mihomo (socks-core mode)"
 
 mkdir -p /etc/rc.conf.d /var/db/os-mihomo
 echo 'mihomo_enable="YES"' > /etc/rc.conf.d/mihomo
-touch /var/log/mihomo.log /var/log/mihomo_sub.log 2>/dev/null || true
+touch /var/log/mihomo.log /var/log/mihomo_sub.log /var/log/mihomo_watchdog.log 2>/dev/null || true
 
-# Script permissions
-chmod 0755 /usr/local/etc/mihomo/sub/sub.sh 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/mihomo/setup_unbound.php 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/mihomo/setup_firewall.php 2>/dev/null || true
-chmod 0755 /usr/local/etc/rc.d/mihomo 2>/dev/null || true
+# Script permissions（manifest 内嵌脚本禁止续行，长列表一律单行）
+chmod 0755 /usr/local/etc/mihomo/sub/sub.sh /usr/bin/mihomo_sub /usr/local/etc/rc.d/mihomo 2>/dev/null || true
+chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py 2>/dev/null || true
 
-# CSPRNG secret initialization and permissions (0600)
+# CSPRNG secret initialization (0600)
 if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
     /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh generate >/dev/null 2>&1 || true
 fi
+chmod 0600 /usr/local/etc/mihomo/secret.key /usr/local/etc/mihomo/config.yaml /usr/local/etc/mihomo/sub/env /usr/local/etc/mihomo/sub/template_config.yaml 2>/dev/null || true
 
-chmod 0600 /usr/local/etc/mihomo/secret.key 2>/dev/null || true
-chmod 0600 /usr/local/etc/mihomo/config.yaml 2>/dev/null || true
-chmod 0600 /usr/local/etc/mihomo/sub/env /usr/local/etc/mihomo/sub/template_config.yaml 2>/dev/null || true
-
-# Legacy WebGUI cleanup
+# Legacy WebGUI cleanup（仅清理旧版遗留页面，不触碰其他插件）
 rm -f /usr/local/www/mihomo.php /usr/local/www/mihomo_logs.php /usr/local/www/mihomo_sub.php /usr/local/www/mihomo_sub_log.php
-rm -f /usr/local/www/sub.php /usr/local/www/status_sub_logs.php /usr/local/www/status_mihomo.php
-rm -f /usr/local/www/services_mihomo.php /usr/local/www/status_mihomo_logs.php
-rm -f /usr/local/www/services_mihomosub.php /usr/local/www/status_mihomosub_log.php
 rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json
-rm -rf /usr/local/opnsense/mvc/app/models/OPNsense/Magic
-
-if [ -f "$CONFIG_FILE" ]; then
-    if [ -x /usr/local/opnsense/scripts/mihomo/setup_firewall.php ]; then
-        echo "===> Setting up TUN interface and firewall rules safely via DOM helper"
-        /usr/local/opnsense/scripts/mihomo/setup_firewall.php install || {
-            echo "Warning: Failed to configure firewall/interface for Mihomo" >&2
-        }
-    fi
-fi
 
 echo "===> Reloading OPNsense services"
-if [ -x /usr/local/opnsense/scripts/mihomo/setup_unbound.php ]; then
-    /usr/local/opnsense/scripts/mihomo/setup_unbound.php install || {
-        echo "Failed to configure Unbound forwarding for Mihomo" >&2
-        exit 1
-    }
-fi
-
 service configd restart >/dev/null 2>&1 || true
-configctl filter reload >/dev/null 2>&1 || true
+
+echo "===> Starting mihomo (socks-core, no TUN, no DNS/PF changes)"
 service mihomo restart >/dev/null 2>&1 || true
-configctl template reload OPNsense/Unbound >/dev/null 2>&1 || true
-configctl unbound restart >/dev/null 2>&1 || true
-/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf flush_zone . >/dev/null 2>&1 || true
-configctl unbound cache flush >/dev/null 2>&1 || true
+
+# 健康门禁：确认 socks(7891) / DNS(1053) / API(9090) 就绪；失败仅显著告警，不阻塞包注册，
+# 也不做任何 DNS/PF 变更 —— 本模式天然不影响直连。
+port_up() { sockstat -4 -l 2>/dev/null | grep -q "127.0.0.1:$1"; }
+
+HEALTH_OK=0
+_i=0
+while [ "$_i" -lt 30 ]; do
+    if port_up 7891 && port_up 1053 && port_up 9090; then
+        HEALTH_OK=1
+        break
+    fi
+    sleep 1
+    _i=$((_i + 1))
+done
+
+if [ "$HEALTH_OK" -eq 1 ]; then
+    echo "===> os-mihomo healthy: socks 7891 / dns 1053 / api 9090 all listening"
+else
+    echo "WARNING: os-mihomo health check FAILED after install (7891/1053/9090 not ready in 30s)." >&2
+    echo "  DIRECT internet and DNS are NOT affected. Check: service mihomo status ; tail -50 /var/log/mihomo.log" >&2
+    echo "  Rollback: pkg delete os-mihomo" >&2
+    echo "[$(date '+%F %T')] os-mihomo HEALTH CHECK FAILED after install (7891/1053/9090 not ready in 30s)." > /root/os-mihomo-install-warning.log
+fi

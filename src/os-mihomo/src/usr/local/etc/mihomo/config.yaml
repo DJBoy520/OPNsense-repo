@@ -5,8 +5,7 @@ bind-address: 127.0.0.1
 mode: rule
 keep-alive-interval: 15
 external-controller: 127.0.0.1:9090
-external-ui: /usr/local/etc/mihomo/ui
-external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
+external-ui: /usr/local/etc/mihomo/ui #面板静态文件随包内置（zashboard v3.29.1），不设 external-ui-url，杜绝运行期自动下载
 secret: ""
 client-fingerprint: chrome
 profile:
@@ -14,7 +13,7 @@ profile:
   store-fake-ip: true
 geodata-mode: true
 geodata-loader: memconservative
-geo-auto-update: true
+geo-auto-update: false #关闭运行期自动更新（供应链加固）；需要更新时经 Clash API /configs/geo 刷新
 geo-update-interval: 24
 unified-delay: true
 tcp-concurrent: true
@@ -45,7 +44,7 @@ sniffer:
     - "+.push.apple.com"
     - Mijia Cloud
 tun:
-  enable: true
+  enable: false #FreeBSD/OPNsense 无 sing-tun 实现（实测报 configure tun interface: invalid argument），本机透明代理由 hev-socks5-tunnel + PF route-to 承担，mihomo 仅作 socks 核心；勿开启
   stack: gvisor #使用gvisor，提供更好的兼容性和性能，system栈可能在某些环境下存在兼容性问题。
   device: tun_mihomo
   mtu: 1500

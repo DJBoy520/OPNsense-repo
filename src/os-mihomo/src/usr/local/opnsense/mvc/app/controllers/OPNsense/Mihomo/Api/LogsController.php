@@ -76,9 +76,10 @@ class LogsController extends ApiControllerBase
                 continue;
             }
 
-            // Detect log level if present: [info], [warning], [error], [debug], etc.
+            // Detect log level: logrus TextFormatter "level=info" or legacy "[info]" bracket format
             $lineLevel = 'info';
-            if (preg_match('/\[(debug|info|warning|warn|error|fatal|silent)\]/i', $trimmed, $m)) {
+            if (preg_match('/\blevel=(debug|info|warning|warn|error|fatal|silent)\b/i', $trimmed, $m) ||
+                preg_match('/\[(debug|info|warning|warn|error|fatal|silent)\]/i', $trimmed, $m)) {
                 $lineLevel = strtolower($m[1]);
                 if ($lineLevel === 'warn') {
                     $lineLevel = 'warning';

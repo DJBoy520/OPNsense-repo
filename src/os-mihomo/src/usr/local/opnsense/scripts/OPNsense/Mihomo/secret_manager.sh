@@ -31,19 +31,23 @@ case "$cmd" in
         chmod 0600 "$SECRET_FILE"
         printf "%s" "$NEW_SECRET" > "$SECRET_FILE"
 
+        # secret 经临时 sed 脚本传递，避免出现在进程参数（ps 可见）
+        SED_SCRIPT="$(mktemp)"
+        chmod 0600 "$SED_SCRIPT" 2>/dev/null || true
         for f in "$CONFIG_FILE" "$TEMPLATE_FILE"; do
             if [ -f "$f" ]; then
                 chmod 0600 "$f" 2>/dev/null || true
-                sed -i '' "s/^secret:.*/secret: \"${NEW_SECRET}\"/" "$f" 2>/dev/null || \
-                sed -i "s/^secret:.*/secret: \"${NEW_SECRET}\"/" "$f" 2>/dev/null || true
+                printf 's/^secret:.*/secret: "%s"/\n' "$NEW_SECRET" > "$SED_SCRIPT"
+                sed -i '' -f "$SED_SCRIPT" "$f" 2>/dev/null || sed -i -f "$SED_SCRIPT" "$f" 2>/dev/null || true
             fi
         done
 
         if [ -f "$ENV_FILE" ]; then
             chmod 0600 "$ENV_FILE" 2>/dev/null || true
-            sed -i '' "s/^mihomo_secret=.*/mihomo_secret=\"${NEW_SECRET}\"/" "$ENV_FILE" 2>/dev/null || \
-            sed -i "s/^mihomo_secret=.*/mihomo_secret=\"${NEW_SECRET}\"/" "$ENV_FILE" 2>/dev/null || true
+            printf 's/^mihomo_secret=.*/mihomo_secret="%s"/\n' "$NEW_SECRET" > "$SED_SCRIPT"
+            sed -i '' -f "$SED_SCRIPT" "$ENV_FILE" 2>/dev/null || sed -i -f "$SED_SCRIPT" "$ENV_FILE" 2>/dev/null || true
         fi
+        rm -f "$SED_SCRIPT"
         echo "OK: secret generated and secured"
         ;;
     get)

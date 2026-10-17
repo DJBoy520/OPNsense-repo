@@ -51,21 +51,39 @@ if mkdir "$LOCK_DIR" 2>/dev/null; then
     LOCK_HELD=1
     printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
 else
-    echo "错误：订阅任务已在运行，请勿重复执行。"
-    [ -f "$LOCK_DIR/pid" ] && echo "当前锁持有进程 PID: $(cat "$LOCK_DIR/pid" 2>/dev/null)"
-    exit 9
+    # 锁残留检查：持有者进程已死则清理陈旧锁并继续
+    _lock_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$_lock_pid" ] && ! kill -0 "$_lock_pid" 2>/dev/null; then
+        echo "警告：发现陈旧锁（持有者 PID $_lock_pid 已不存在），自动清理后继续。"
+        rm -rf "$LOCK_DIR"
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            LOCK_HELD=1
+            printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
+        else
+            echo "错误：陈旧锁清理失败，请手动 rm -rf $LOCK_DIR"
+            exit 9
+        fi
+    else
+        echo "错误：订阅任务已在运行，请勿重复执行。"
+        [ -f "$LOCK_DIR/pid" ] && echo "当前锁持有进程 PID: $(cat "$LOCK_DIR/pid" 2>/dev/null)"
+        exit 9
+    fi
 fi
 
-# mihomo订阅地址校验
+# mihomo订阅地址校验（仅允许 https，杜绝明文传输订阅凭据）
 [ -z "$mihomo_URL" ] && {
     echo "错误：未设置 mihomo_URL 环境变量"
     exit 1
 }
 URL_SCHEME_CHECK=$(printf "%s" "$mihomo_URL" | tr '[:upper:]' '[:lower:]')
 case "$URL_SCHEME_CHECK" in
-    http://*|https://*) ;;
+    https://*) ;;
+    http://*)
+        echo "错误：订阅地址禁止使用 http://（订阅凭据会明文传输），请使用 https://"
+        exit 1
+        ;;
     *)
-        echo "错误：mihomo_URL 必须以 http:// 或 https:// 开头"
+        echo "错误：mihomo_URL 必须以 https:// 开头"
         exit 1
         ;;
 esac
@@ -78,17 +96,12 @@ elif [ -x "$SECRET_MANAGER" ]; then
 fi
 [ -z "$Secret" ] && Secret=$(openssl rand -hex 32)
 
-# URL 脱敏函数（隐藏 query 参数及 token）
+# URL 脱敏函数（隐藏 path、query 参数及 token，只保留 scheme://host）
 mask_url() {
     raw_url="$1"
     scheme=$(printf "%s" "$raw_url" | sed -n 's/^\([a-zA-Z][a-zA-Z0-9+.-]*:\/\/\).*/\1/p')
-    rest=$(printf "%s" "$raw_url" | sed 's/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\///')
-    host_path=$(printf "%s" "$rest" | cut -d'?' -f1 | cut -d'#' -f1)
-    if [ "$rest" != "$host_path" ]; then
-        echo "${scheme}${host_path}?***"
-    else
-        echo "${scheme}${host_path}"
-    fi
+    host=$(printf "%s" "$raw_url" | sed 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' | cut -d'/' -f1 | cut -d'?' -f1)
+    echo "${scheme}${host}/***"
 }
 
 #################### 预清理临时文件 ####################
@@ -125,11 +138,11 @@ fi
 
 echo ""
 echo "尝试不使用代理从：$DISPLAY_URL 下载配置..."
-if curl -fSL -sS --retry 3 -m 15 -o "$TMP_RAW" "$TARGET_URL"; then
+if curl -fSL -sS --retry 3 -m 120 --connect-timeout 15 -o "$TMP_RAW" "$TARGET_URL"; then
     echo "下载成功：$TMP_RAW"
 else
     echo "下载失败，尝试通过 SOCKS5 代理 127.0.0.1:7891 下载配置..."
-    if curl -fSL -sS --retry 2 -m 15 --socks5-hostname 127.0.0.1:7891 -o "$TMP_RAW" "$TARGET_URL"; then
+    if curl -fSL -sS --retry 2 -m 120 --connect-timeout 15 --socks5-hostname 127.0.0.1:7891 -o "$TMP_RAW" "$TARGET_URL"; then
         echo "下载成功：$TMP_RAW"
     else
         echo "下载失败：$DISPLAY_URL"
@@ -275,40 +288,32 @@ fi
 FINAL_SIZE=$(wc -c < "$TMP_FINAL" | tr -d ' ')
 echo "合成配置大小: ${FINAL_SIZE} 字节"
 
-cp "$TMP_FINAL" "$Conf_Dir/config.yaml" || {
-    echo "写入临时配置失败：$Conf_Dir/config.yaml"
-    exit 1
-}
+# 在临时文件上完成 secret 注入（绝不触碰生产 config.yaml；secret 经环境变量传递，避免出现在进程参数里）
+awk '!/^[[:space:]]*secret[[:space:]]*:/ { print }' "$TMP_FINAL" > "${TMP_FINAL}.clean" && mv "${TMP_FINAL}.clean" "$TMP_FINAL"
 
-# 先清理旧的 secret，再在 external-ui 行之后插入 secret
-awk '!/^[[:space:]]*secret[[:space:]]*:/ { print }' "$Conf_Dir/config.yaml" > "$Conf_Dir/config.clean.yaml" && mv "$Conf_Dir/config.clean.yaml" "$Conf_Dir/config.yaml"
-
-if grep -q '^external-ui:' "$Conf_Dir/config.yaml"; then
-    awk -v secret="secret: \"${Secret}\"" '
+if grep -q '^external-ui:' "$TMP_FINAL"; then
+    MIHOMO_SUB_SECRET="$Secret" awk '
       /^external-ui:/ {
           print;
-          print secret;
+          print "secret: \"" ENVIRON["MIHOMO_SUB_SECRET"] "\"";
           next
       }
       { print }
-    ' "$Conf_Dir/config.yaml" > "$Conf_Dir/config.new.yaml" && mv "$Conf_Dir/config.new.yaml" "$Conf_Dir/config.yaml"
+    ' "$TMP_FINAL" > "${TMP_FINAL}.withsecret" && mv "${TMP_FINAL}.withsecret" "$TMP_FINAL"
 else
-    echo "secret: \"${Secret}\"" >> "$Conf_Dir/config.yaml"
+    printf 'secret: "%s"\n' "$Secret" >> "$TMP_FINAL"
 fi
-chmod 600 "$Conf_Dir/config.yaml" 2>/dev/null || true
+chmod 600 "$TMP_FINAL" 2>/dev/null || true
 echo "合成完成!"
 echo ""
 
 #################### 原子应用配置并重启 ####################
-if [ ! -s "$Conf_Dir/config.yaml" ]; then
-    echo "目标配置文件为空，停止应用。"
-    exit 1
-fi
-
+# 交由 atomic_config_updater：mihomo -t 校验通过才备份并原子替换 config.yaml，
+# 校验失败时生产配置保持不变（坏订阅永远不会覆盖好配置）。
 echo "应用配置..."
 if [ -x "$ATOMIC_UPDATER" ]; then
-    if ! "$ATOMIC_UPDATER" "$Conf_Dir/config.yaml" reload; then
-        echo "原子更新配置失败！"
+    if ! "$ATOMIC_UPDATER" "$TMP_FINAL" reload; then
+        echo "原子更新配置失败！生产配置保持不变。"
         exit 1
     fi
 else
@@ -364,9 +369,10 @@ LAN_IP=$(
 
 # 如果还是取不到，就给一个兜底提示
 if [ -n "$LAN_IP" ]; then
-  echo "仪表盘访问地址: http://${LAN_IP}:9090/ui"
+  echo "面板访问（API 仅监听 127.0.0.1，需 SSH 隧道）:"
+  echo "  ssh -L 9090:127.0.0.1:9090 root@${LAN_IP}  然后本机打开 http://127.0.0.1:9090/ui"
 else
-  echo "仪表盘访问地址: 未能自动获取 LAN/OPT1 地址"
+  echo "面板访问：未能自动获取 LAN/OPT1 地址，请手动 SSH 隧道 -L 9090:127.0.0.1:9090"
 fi
 
 if [ -x "$SECRET_MANAGER" ]; then

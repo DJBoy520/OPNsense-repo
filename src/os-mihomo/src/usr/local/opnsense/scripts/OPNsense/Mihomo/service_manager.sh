@@ -109,6 +109,34 @@ check_tun_ready() {
     return 1
 }
 
+# socks-core 模式判定：config.yaml 中 tun.enable 是否为 true
+tun_enabled() {
+    [ -f "${CONF_FILE}" ] || return 1
+    awk '
+        /^tun:[[:space:]]*$/ { in_tun=1; next }
+        in_tun && /^[^[:space:]]/ { in_tun=0 }
+        in_tun && /^[[:space:]]*enable:[[:space:]]*true/ { found=1; exit }
+        END { exit !found }
+    ' "${CONF_FILE}" 2>/dev/null
+}
+
+# 传输层就绪检查：TUN 模式查 tun_mihomo；socks 模式查 7891 监听
+check_transport_ready() {
+    if tun_enabled; then
+        check_tun_ready
+    else
+        sockstat -4 -l -p 7891 2>/dev/null | grep -q 7891 || sockstat -4 -l 2>/dev/null | grep -q '127.0.0.1:7891'
+    fi
+}
+
+transport_name() {
+    if tun_enabled; then
+        echo "TUN"
+    else
+        echo "SOCKS"
+    fi
+}
+
 do_start() {
     # Check if disabled
     if [ -f /etc/rc.conf.d/mihomo ]; then
@@ -127,7 +155,18 @@ do_start() {
         return 1
     fi
 
-    # 1. Config validation
+    # 1. Already running? (先于配置校验：磁盘上配置损坏时不得破坏健康运行中的实例)
+    if [ -f "${PID_FILE}" ]; then
+        _old_pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+        if [ -n "${_old_pid}" ] && kill -0 "${_old_pid}" 2>/dev/null; then
+            echo "Mihomo is already running with PID ${_old_pid}."
+            do_healthcheck
+            return 0
+        fi
+        rm -f "${PID_FILE}"
+    fi
+
+    # 2. Config validation
     if [ ! -f "${CONF_FILE}" ]; then
         cleanup_routing_and_pf
         set_state "FAILED" "DIRECT" null "Configuration file not found: ${CONF_FILE}"
@@ -142,21 +181,10 @@ do_start() {
         return 1
     fi
 
-    # 2. Set STARTING
+    # 3. Set STARTING
     set_state "STARTING" "DIRECT" null "Service is starting"
 
-    # Cleanup stale pid/tun before starting
-    if [ -f "${PID_FILE}" ]; then
-        _old_pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
-        if [ -n "${_old_pid}" ] && kill -0 "${_old_pid}" 2>/dev/null; then
-            echo "Mihomo is already running with PID ${_old_pid}."
-            do_healthcheck
-            return 0
-        fi
-        rm -f "${PID_FILE}"
-    fi
-
-    if ifconfig "${TUN_DEV}" >/dev/null 2>&1; then
+    if tun_enabled && ifconfig "${TUN_DEV}" >/dev/null 2>&1; then
         ifconfig "${TUN_DEV}" destroy 2>/dev/null || true
     fi
 
@@ -183,17 +211,16 @@ do_start() {
         return 1
     fi
 
-    # 6. Check TUN interface
-    if ! check_tun_ready; then
-        # If API is up but TUN is missing, mark DEGRADED or check if TUN was expected
-        set_state "DEGRADED" "DIRECT" "${_pid}" "API is ready but TUN interface ${TUN_DEV} is DOWN"
-        echo "Warning: Mihomo started but TUN interface ${TUN_DEV} is not detected."
+    # 6. Transport check (TUN 模式查 tun_mihomo；socks-core 模式查 7891 监听)
+    if ! check_transport_ready; then
+        set_state "DEGRADED" "DIRECT" "${_pid}" "API is ready but transport ($(transport_name)) is DOWN"
+        echo "Warning: Mihomo started but transport ($(transport_name)) is not detected."
         return 0
     fi
 
     # 7. Health check passed -> RUNNING / PROXY
-    set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode"
-    echo "Mihomo started successfully (PID ${_pid}, mode PROXY)."
+    set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode ($(transport_name))"
+    echo "Mihomo started successfully (PID ${_pid}, mode PROXY, transport $(transport_name))."
     return 0
 }
 
@@ -316,7 +343,7 @@ do_healthcheck() {
     _tun_ok=0
     _api_ok=0
 
-    if check_tun_ready; then
+    if check_transport_ready; then
         _tun_ok=1
     fi
 
@@ -325,20 +352,20 @@ do_healthcheck() {
     fi
 
     if [ "${_tun_ok}" -eq 1 ] && [ "${_api_ok}" -eq 1 ]; then
-        set_state "RUNNING" "PROXY" "${_pid}" "Healthy (TUN UP, API UP)"
-        echo "Mihomo is running (PID ${_pid}, TUN UP, API UP)."
+        set_state "RUNNING" "PROXY" "${_pid}" "Healthy ($(transport_name) UP, API UP)"
+        echo "Mihomo is running (PID ${_pid}, $(transport_name) UP, API UP)."
         return 0
     elif [ "${_tun_ok}" -eq 1 ] && [ "${_api_ok}" -eq 0 ]; then
-        set_state "DEGRADED" "PROXY" "${_pid}" "Degraded (TUN UP, API DOWN)"
-        echo "Mihomo is degraded (PID ${_pid}, TUN UP, API DOWN)."
+        set_state "DEGRADED" "PROXY" "${_pid}" "Degraded ($(transport_name) UP, API DOWN)"
+        echo "Mihomo is degraded (PID ${_pid}, $(transport_name) UP, API DOWN)."
         return 0
     elif [ "${_tun_ok}" -eq 0 ] && [ "${_api_ok}" -eq 1 ]; then
-        set_state "DEGRADED" "DIRECT" "${_pid}" "Degraded (TUN DOWN, API UP)"
-        echo "Mihomo is degraded (PID ${_pid}, TUN DOWN, API UP)."
+        set_state "DEGRADED" "DIRECT" "${_pid}" "Degraded ($(transport_name) DOWN, API UP)"
+        echo "Mihomo is degraded (PID ${_pid}, $(transport_name) DOWN, API UP)."
         return 0
     else
-        set_state "FAILED" "DIRECT" "${_pid}" "Unhealthy (TUN DOWN, API DOWN)"
-        echo "Mihomo is unhealthy (PID ${_pid}, TUN DOWN, API DOWN)."
+        set_state "FAILED" "DIRECT" "${_pid}" "Unhealthy ($(transport_name) DOWN, API DOWN)"
+        echo "Mihomo is unhealthy (PID ${_pid}, $(transport_name) DOWN, API DOWN)."
         return 1
     fi
 }
