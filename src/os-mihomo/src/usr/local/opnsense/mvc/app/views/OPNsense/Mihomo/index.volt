@@ -43,7 +43,7 @@
 <div class="content-box" style="padding-bottom: 1.5em;">
     <div class="col-xs-12">
         <h2>{{ lang._('Mihomo - Dashboard API Secret (9090)') }}</h2>
-        <p class="text-muted">{{ lang._('Secret for the bundled dashboard (http://router-ip:9090/ui/) and the external controller API.') }}</p>
+        <p class="text-muted">{{ lang._('Secret for the bundled dashboard (http://127.0.0.1:9090/ui/) and the external controller API.') }}</p>
         <hr/>
     </div>
 
@@ -53,7 +53,7 @@
             <div>
                 <code id="api_secret_masked" style="font-size: 13px;">{{ lang._('Loading...') }}</code>
             </div>
-            <span class="help-block">{{ lang._('Use this secret to sign in to the dashboard at port 9090. Changes are applied to config.yaml, the subscription template and the sub env, then mihomo is hot-reloaded.') }}</span>
+            <span class="help-block">{{ lang._('Use this secret to sign in to the dashboard at port 9090. Note: By default the external controller listens on 127.0.0.1 only; LAN access requires an SSH tunnel or waiting for future LAN API exposure support. Changes are applied to config.yaml, the subscription template and the sub env, then mihomo is hot-reloaded.') }}</span>
         </div>
         <button class="btn btn-default" id="btn_secret_reveal" type="button">
             <i class="fa fa-eye"></i> {{ lang._('Show Secret') }}
@@ -470,7 +470,7 @@ $(function () {
     });
 
     $('#btn_secret_reveal').click(function () {
-        ajaxGet('/api/mihomo/general/secretReveal', {}, function (data) {
+        ajaxCall('/api/mihomo/general/secretReveal', {}, function (data) {
             if (data && data.status === 'ok') {
                 showSecretDialog('{{ lang._("Dashboard API Secret") }}', data.secret);
             } else {

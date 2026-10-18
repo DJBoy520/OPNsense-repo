@@ -74,8 +74,58 @@ if grep -E "^command:.*%s" "$ACTIONS" | grep -q .; then
 fi
 echo "  [PASS] all action parameters live in parameters: templates"
 
-# Test 6: PHP 语法检查（有 php 时）
-echo "--> Test 6: PHP syntax..."
+# Test 7: v1.0.7 安全加固守卫
+echo "--> Test 7: v1.0.7 security and robustness guards..."
+# ① ACL.xml 的 general 组含 ui/mihomo、ui/mihomo/、api/mihomo/service/* 与 api/mihomo/subscription/*
+ACL_XML="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/models/OPNsense/Mihomo/ACL/ACL.xml"
+[ -f "$ACL_XML" ] || { echo "FAIL: missing ACL.xml"; exit 1; }
+awk '
+    /<page-services-mihomo-general>/ { in_gen = 1 }
+    in_gen && /<pattern>ui\/mihomo<\/pattern>/ { has_ui_exact = 1 }
+    in_gen && /<pattern>ui\/mihomo\/<\/pattern>/ { has_ui_slash = 1 }
+    in_gen && /<pattern>api\/mihomo\/service\/\*<\/pattern>/ { has_svc = 1 }
+    in_gen && /<pattern>api\/mihomo\/subscription\/\*<\/pattern>/ { has_sub = 1 }
+    in_gen && /<\/page-services-mihomo-general>/ { closed = 1; exit }
+    END {
+        if (!in_gen || !closed || !has_ui_exact || !has_ui_slash || !has_svc || !has_sub) {
+            exit 1
+        }
+    }
+' "$ACL_XML" || { echo "FAIL: ACL.xml general group must contain ui/mihomo, ui/mihomo/, api/mihomo/service/* and api/mihomo/subscription/*"; exit 1; }
+echo "  [PASS] ACL.xml general group contains ui/mihomo, ui/mihomo/, api/mihomo/service/* and api/mihomo/subscription/*"
+
+# ② LogsController.php 含 configdpRun 且不含 "mihomo log ' ." 拼接
+LOGS_CTRL="$CTRL_DIR/Api/LogsController.php"
+[ -f "$LOGS_CTRL" ] || { echo "FAIL: missing LogsController.php"; exit 1; }
+grep -q "configdpRun('mihomo log'" "$LOGS_CTRL" || {
+    echo "FAIL: LogsController.php must use configdpRun('mihomo log', ...)"; exit 1;
+}
+if grep -E "configdRun\(['\"]mihomo log[[:space:]]*['\"][[:space:]]*\." "$LOGS_CTRL" >/dev/null 2>&1; then
+    echo "FAIL: LogsController.php must not concatenate configdRun('mihomo log ' .)"; exit 1;
+fi
+echo "  [PASS] LogsController uses configdpRun without string concatenation"
+
+# ③ GeneralController.php 的 secretRevealAction 含 isPost 校验
+GEN_CTRL="$CTRL_DIR/Api/GeneralController.php"
+[ -f "$GEN_CTRL" ] || { echo "FAIL: missing GeneralController.php"; exit 1; }
+awk '
+    /function secretRevealAction/ { in_fn = 1 }
+    in_fn && /isPost\(\)/ { has_post = 1 }
+    in_fn && /^    \}/ {
+        if (!has_post) { exit 1 }
+        exit 0
+    }
+' "$GEN_CTRL" || { echo "FAIL: GeneralController secretRevealAction must check isPost()"; exit 1; }
+echo "  [PASS] GeneralController secretRevealAction checks isPost()"
+
+# ④ GeneralController.php 含 getModelNodes 覆盖
+grep -q "function getModelNodes" "$GEN_CTRL" || {
+    echo "FAIL: GeneralController must override getModelNodes()"; exit 1;
+}
+echo "  [PASS] GeneralController overrides getModelNodes()"
+
+# Test 8: PHP 语法检查（有 php 时）
+echo "--> Test 8: PHP syntax..."
 if command -v php >/dev/null 2>&1; then
     for php_file in "$CTRL_DIR"/*.php "$CTRL_DIR"/Api/*.php; do
         php -l "$php_file" >/dev/null || { echo "FAIL: PHP syntax error in $php_file"; exit 1; }

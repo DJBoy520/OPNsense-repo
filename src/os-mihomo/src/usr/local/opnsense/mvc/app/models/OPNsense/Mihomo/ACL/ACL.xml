@@ -9,8 +9,12 @@
     <page-services-mihomo-general>
         <name>Services: Mihomo: General</name>
         <patterns>
+            <pattern>ui/mihomo</pattern>
+            <pattern>ui/mihomo/</pattern>
             <pattern>ui/mihomo/index*</pattern>
             <pattern>api/mihomo/general/*</pattern>
+            <pattern>api/mihomo/service/*</pattern>
+            <pattern>api/mihomo/subscription/*</pattern>
         </patterns>
     </page-services-mihomo-general>
     <page-services-mihomo-status>

@@ -12,6 +12,8 @@ export MIHOMO_SECRET_FILE="$TMP_TEST_DIR/secret.key"
 export MIHOMO_CONFIG_FILE="$TMP_TEST_DIR/config.yaml"
 export MIHOMO_TEMPLATE_FILE="$TMP_TEST_DIR/template_config.yaml"
 export MIHOMO_ENV_FILE="$TMP_TEST_DIR/env"
+# 与 sub.sh 同一把锁的路径变量，测试用临时目录避免碰 /var/run
+export MIHOMO_LOCK_DIR="$TMP_TEST_DIR/sub.lock"
 
 echo "secret: \"\"" > "$MIHOMO_CONFIG_FILE"
 # env 与生产一致：+POST_INSTALL 保证存在（sample 兜底）
@@ -21,6 +23,9 @@ printf "mihomo_URL='https://bing.com'\nmihomo_secret=''\n" > "$MIHOMO_ENV_FILE"
 echo "--> Test 1: Generating secret..."
 sh -n "$SECRET_MGR" || { echo "FAIL: secret_manager syntax error"; exit 1; }
 SECRET_OUT="$(sh "$SECRET_MGR" generate)"
+if [ -d "$MIHOMO_LOCK_DIR" ]; then
+    echo "FAIL: lock dir not released after generate"; exit 1
+fi
 echo "  [PASS] Generation output: $SECRET_OUT"
 
 # Test 2: Masking logic
@@ -92,5 +97,99 @@ if ! grep -qF "mihomo_secret='$CUSTOM_SECRET'" "$MIHOMO_ENV_FILE"; then
     echo "FAIL: mihomo_secret line not appended"; exit 1
 fi
 echo "  [PASS] mihomo_secret line appended to env"
+
+# Test 6: 文件末尾无换行时，set 追加补写不得与上一行拼接（M3）
+echo "--> Test 6: set on files without trailing newline..."
+SECRET_6="trailing-newline-check-0123456789ab"
+B64_6="b64:$(printf '%s' "$SECRET_6" | base64)"
+printf 'port: 9090\nexternal-controller: 127.0.0.1:9090' > "$MIHOMO_CONFIG_FILE"
+printf "mihomo_URL='https://bing.com'" > "$MIHOMO_ENV_FILE"
+SET_OUT="$(sh "$SECRET_MGR" set "$B64_6")"
+case "$SET_OUT" in
+    OK*) : ;;
+    *) echo "FAIL: set on newline-less files: $SET_OUT"; exit 1 ;;
+esac
+if ! grep -qxF 'external-controller: 127.0.0.1:9090' "$MIHOMO_CONFIG_FILE"; then
+    echo "FAIL: config.yaml last line was merged with the appended secret"; exit 1
+fi
+if ! grep -qF "secret: \"$SECRET_6\"" "$MIHOMO_CONFIG_FILE"; then
+    echo "FAIL: secret not appended to config.yaml"; exit 1
+fi
+if ! grep -qxF "mihomo_URL='https://bing.com'" "$MIHOMO_ENV_FILE"; then
+    echo "FAIL: env last line was merged with the appended secret"; exit 1
+fi
+if ! grep -qF "mihomo_secret='$SECRET_6'" "$MIHOMO_ENV_FILE"; then
+    echo "FAIL: secret not appended to env"; exit 1
+fi
+echo "  [PASS] newline-less files keep structure and receive secret"
+
+# Test 7: 短密钥脱敏不得泄露前缀；长度 >=32 才显示前 4 字符（M5）
+echo "--> Test 7: masked output for short/long secrets..."
+SHORT_SECRET="short-secret-1234"
+sh "$SECRET_MGR" set "b64:$(printf '%s' "$SHORT_SECRET" | base64)" >/dev/null
+MASKED_SHORT="$(sh "$SECRET_MGR" masked)"
+EXPECT_ALL_STARS="$(printf '%40s' '' | tr ' ' '*')"
+if [ "$MASKED_SHORT" != "$EXPECT_ALL_STARS" ]; then
+    echo "FAIL: short secret masked output must be 40 stars only: $MASKED_SHORT"; exit 1
+fi
+case "$MASKED_SHORT" in
+    *shor*) echo "FAIL: masked output leaks short-secret prefix"; exit 1 ;;
+esac
+LONG_SECRET="0123456789abcdef0123456789abcdef"
+sh "$SECRET_MGR" set "b64:$(printf '%s' "$LONG_SECRET" | base64)" >/dev/null
+MASKED_LONG="$(sh "$SECRET_MGR" masked)"
+EXPECT_PREFIXED="0123$(printf '%36s' '' | tr ' ' '*')"
+if [ "$MASKED_LONG" != "$EXPECT_PREFIXED" ]; then
+    echo "FAIL: 32-char secret masked output wrong: $MASKED_LONG"; exit 1
+fi
+echo "  [PASS] short secret fully masked, long secret shows 4-char prefix"
+
+# Test 8: config.yaml 行内注释时 get/masked 提取纯密钥（M4）
+echo "--> Test 8: config fallback extraction with inline comment..."
+rm -f "$MIHOMO_SECRET_FILE"
+printf 'secret: "cmtkey123" # inline comment\n' > "$MIHOMO_CONFIG_FILE"
+GOT_SECRET="$(sh "$SECRET_MGR" get)"
+if [ "$GOT_SECRET" != "cmtkey123" ]; then
+    echo "FAIL: inline comment leaked into extracted secret: $GOT_SECRET"; exit 1
+fi
+MASKED_CMT="$(sh "$SECRET_MGR" masked)"
+if [ "$MASKED_CMT" != "$EXPECT_ALL_STARS" ]; then
+    echo "FAIL: masked from commented config line wrong: $MASKED_CMT"; exit 1
+fi
+echo "  [PASS] inline comment stripped by get and masked"
+
+# Test 9: 写操作占用/释放与 sub.sh 同一把锁，陈旧锁可自动清理（M1）
+echo "--> Test 9: subscription lock acquire/release..."
+sh "$SECRET_MGR" set "$B64_6" >/dev/null
+if [ -d "$MIHOMO_LOCK_DIR" ]; then
+    echo "FAIL: lock dir not released after set"; exit 1
+fi
+sh -c 'exit 0' &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null || true
+mkdir -p "$MIHOMO_LOCK_DIR"
+printf '%s\n' "$DEAD_PID" > "$MIHOMO_LOCK_DIR/pid"
+SET_OUT="$(sh "$SECRET_MGR" set "$B64_6")"
+case "$SET_OUT" in
+    OK*) : ;;
+    *) echo "FAIL: set did not recover from stale lock: $SET_OUT"; exit 1 ;;
+esac
+if [ -d "$MIHOMO_LOCK_DIR" ]; then
+    echo "FAIL: lock dir not released after stale-lock recovery"; exit 1
+fi
+# 只读命令不参与加锁：锁被活进程持有时也应立即返回且不破坏锁
+mkdir -p "$MIHOMO_LOCK_DIR"
+printf '%s\n' "$$" > "$MIHOMO_LOCK_DIR/pid"
+READ_START="$(date +%s)"
+MASKED_READONLY="$(sh "$SECRET_MGR" masked)"
+READ_ELAPSED=$(( $(date +%s) - READ_START ))
+rm -rf "$MIHOMO_LOCK_DIR"
+if [ "$READ_ELAPSED" -gt 2 ]; then
+    echo "FAIL: read-only masked waited on the subscription lock"; exit 1
+fi
+if [ -z "$MASKED_READONLY" ] || [ "$MASKED_READONLY" = "NOT_CONFIGURED" ]; then
+    echo "FAIL: masked returned no value while lock was held"; exit 1
+fi
+echo "  [PASS] lock acquired, released, stale lock recovered, read-only path unlocked"
 
 echo "===> Secret Manager tests PASSED 100%!"

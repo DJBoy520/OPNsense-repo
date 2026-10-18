@@ -56,3 +56,15 @@
 **VM 实测全过**：订阅 set API 返回 ok（URL 掩码不变、同值回写 diff 零变化、http URL 正确拒绝）；四页 200；secret reveal/set/regenerate 全通；9090 面板 Bearer 认证 200；cron.d 6h 订阅 + 1min watchdog 在位；secret.key == config.yaml == template == env 四处一致（原密钥 d046… 保留，可在界面查看）。
 
 **最终包 `output/os-mihomo-1.0.6.pkg` SHA256=a5e994f5ddc05d5c872bf4cd934199e1203968e5e708d8d811fd2bc168d38682**（旧包移入 output/archive/）。
+
+---
+
+## 2026-10-18 · v1.0.7：双模型审计修复（Gemini+DeepSeek 并行编码 + 交叉审计 + 主控验收 + VM 回归）
+
+**审计驱动**：v1.0.6 经 Gemini(5 条)+DeepSeek(14 条) 双模型审计、逐条独立复核（16/19 成立，0 高危）后，19 条发现全量修复。工作流拓扑：Gemini 领 PHP/面板包（6 文件）、DeepSeek 领密钥脚本包（2 文件）并行编码（文件集不相交），全量 13 测试门禁（首次全过），交叉审计互审对方包（DeepSeek 给 PHP 包 4 条已回炉、Gemini 审脚本包 0 条），主控再亲审 diff + VM php -l + 部署回归。
+
+**5 条 medium**：① 密钥操作复用 sub_lib 同一把锁（mkdir+pid+陈旧清理逐字节同语义，等 120s 超时报忙）；② getGeneral/setGeneral 收敛 general 子树（getModelNodes 官方覆盖点 + setAction 过滤版，实测 subscription/customRules 不再泄露）；③ apply_secret_files 原子写+逐文件写后校验失败即非零（0500 目录实测复现过修复前后）；④ secret-set 后订阅缓存存在则 rules-recompose 重合成（authentication 行随密钥轮换）+ 显式 reload 并校验 SIGHUP 输出；⑤ （①的同族）。**低危 9 条**：is_string 输入校验、LogsController configdpRun、ACL 补 ui/mihomo(/)与 service/subscription patterns、reveal POST 化、masked 短密钥不泄露前缀、sed 提取正则吃注释、无换行文件补换行、b64 argv 注释如实化、[failopen] 注释、构建元数据版本号。
+
+**VM 回归全过**：getGeneral 顶层仅 general 键；控制器路径轮换 → "Sent SIGHUP" 校验 → 9090 新 200/旧 401 → 恢复 200；reveal GET 拒、数组拒；四页 200；订阅保存 ok；锁真机验证（nohup 活持有者→等 11s+；杀持有者→5s 轮询清陈旧锁→完成）；四处密钥一致；服务 RUNNING/PROXY；面板 200。
+
+**最终包 `output/os-mihomo-1.0.7.pkg` SHA256=6a682808bb67460267d0e8cb020f5c532fbc3ca3791137c56adabdcecf2c23d6**（1.0.6 移入 archive）。

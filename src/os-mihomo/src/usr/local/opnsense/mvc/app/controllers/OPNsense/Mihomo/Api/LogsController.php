@@ -61,7 +61,7 @@ class LogsController extends ApiControllerBase
         }
 
         $backend = new Backend();
-        $rawLog = $backend->configdRun('mihomo log ' . $maxLines);
+        $rawLog = $backend->configdpRun('mihomo log', [(string)$maxLines]);
 
         if (empty($rawLog)) {
             return ['status' => 'ok', 'logs' => [], 'total' => 0];

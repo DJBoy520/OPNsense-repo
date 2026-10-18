@@ -30,6 +30,7 @@ namespace OPNsense\Mihomo\Api;
 
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Backend;
+use OPNsense\Core\Config;
 use OPNsense\Mihomo\Mihomo;
 
 class GeneralController extends ApiMutableModelControllerBase
@@ -37,9 +38,44 @@ class GeneralController extends ApiMutableModelControllerBase
     protected static $internalModelClass = '\OPNsense\Mihomo\Mihomo';
     protected static $internalModelName = 'mihomo';
 
+    /**
+     * 覆盖基类 getModelNodes，只暴露 general 子树，避免订阅 URL 等敏感信息被 General 子权限读取
+     */
+    protected function getModelNodes()
+    {
+        $nodes = $this->getModel()->getNodes();
+        return [
+            'general' => isset($nodes['general']) ? $nodes['general'] : []
+        ];
+    }
+
+    /**
+     * 覆盖基类 setAction，只接收并更新 mihomo.general 子树，防止跨节点篡改
+     */
+    public function setAction()
+    {
+        $result = ['result' => 'failed'];
+        if ($this->request->isPost()) {
+            $postData = $this->request->getPost(static::$internalModelName);
+            if (!is_array($postData) || !isset($postData['general']) || !is_array($postData['general'])) {
+                return $result;
+            }
+
+            Config::getInstance()->lock();
+            $mdl = $this->getModel();
+            $mdl->setNodes(['general' => $postData['general']]);
+            $result = $this->validate();
+            if (empty($result['result'])) {
+                $this->setActionHook();
+                return $this->save(false, true);
+            }
+        }
+        return $result;
+    }
+
     public function getGeneralAction()
     {
-        /* 26.7 基类没有 getNodes/setNodes：读走标准 getAction()（返回整个模型节点树） */
+        /* 26.7 基类读走 getAction()（现通过 getModelNodes 只返回 general 子树） */
         $result = $this->getAction();
         $backend = new Backend();
         $maskedSecret = trim((string)$backend->configdRun('mihomo secret-masked'));
@@ -175,12 +211,41 @@ class GeneralController extends ApiMutableModelControllerBase
     }
 
     /**
+     * 刷新并热加载 mihomo 配置，确保 config.yaml 内的 secret 与 authentication 同步更新
+     * 订阅缓存存在时先 recompose（重写 config.yaml），再显式 reload 确保生效
+     */
+    private function applySecretReload($backend)
+    {
+        $cacheFile = '/var/db/os-mihomo/subscription-cache.yaml';
+        if (is_file($cacheFile) && filesize($cacheFile) > 0) {
+            $recomposeOutput = trim((string)$backend->configdpRun('mihomo rules-recompose'));
+            if (stripos($recomposeOutput, 'OK') === false) {
+                return 'recompose failed: ' . ($recomposeOutput !== '' ? $recomposeOutput : '未收到合成响应');
+            }
+        }
+        return trim((string)$backend->configdRun('mihomo reload'));
+    }
+
+    /**
+     * 判断 reload 输出是否代表服务成功加载或启动
+     */
+    private function isReloadSuccess($output)
+    {
+        return stripos($output, 'SIGHUP') !== false ||
+               stripos($output, 'Mihomo started successfully') !== false;
+    }
+
+    /**
      * 返回面板登录用的完整密钥（9090 external-controller）
      * 仅 page-services-mihomo* ACL 可达；与订阅 URL 不同，密钥必须能被
      * 管理员查看/复制，否则无法登录内置面板。
+     * M7: 仅接受 POST 请求，受 CSRF 保护
      */
     public function secretRevealAction()
     {
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed', 'message' => '仅接受 POST 请求'];
+        }
         $secret = trim((string)(new Backend())->configdRun('mihomo secret-get'));
         if ($secret === '') {
             return ['status' => 'failed', 'message' => '尚未配置 API 密钥'];
@@ -197,12 +262,15 @@ class GeneralController extends ApiMutableModelControllerBase
             return ['status' => 'failed', 'message' => '仅接受 POST 请求'];
         }
 
-        $secret = (string)$this->request->getPost('secret');
+        $rawSecret = $this->request->getPost('secret');
         $nested = $this->request->getPost('mihomo');
-        if (($secret === '' || $secret === null) && is_array($nested) && isset($nested['secret'])) {
-            $secret = (string)$nested['secret'];
+        if (($rawSecret === '' || $rawSecret === null) && is_array($nested) && isset($nested['secret'])) {
+            $rawSecret = $nested['secret'];
         }
-        $secret = trim((string)$secret);
+        if (!is_string($rawSecret)) {
+            return ['status' => 'failed', 'message' => '密钥格式无效，必须为字符串'];
+        }
+        $secret = trim($rawSecret);
 
         $length = strlen($secret);
         if ($length < 4 || $length > 128) {
@@ -224,8 +292,14 @@ class GeneralController extends ApiMutableModelControllerBase
             return ['status' => 'failed', 'message' => '写入密钥失败: ' . trim($output)];
         }
 
-        // SIGHUP 热加载：mihomo 重读 config.yaml，新密钥立即生效
-        $reloadOutput = trim((string)$backend->configdRun('mihomo reload'));
+        // 订阅缓存存在时 recompose 再 reload；否则直接 reload。校验重载输出
+        $reloadOutput = $this->applySecretReload($backend);
+        if (!$this->isReloadSuccess($reloadOutput)) {
+            return [
+                'status' => 'failed',
+                'message' => '密钥已写入，但热重载失败（旧配置仍在运行）: ' . ($reloadOutput !== '' ? $reloadOutput : '未收到服务响应')
+            ];
+        }
         $masked = trim((string)$backend->configdRun('mihomo secret-masked'));
 
         return [
@@ -243,7 +317,13 @@ class GeneralController extends ApiMutableModelControllerBase
             if (stripos($genOutput, 'OK') === false) {
                 return ['status' => 'failed', 'message' => '生成密钥失败: ' . $genOutput];
             }
-            $reloadOutput = trim((string)$backend->configdRun('mihomo reload'));
+            $reloadOutput = $this->applySecretReload($backend);
+            if (!$this->isReloadSuccess($reloadOutput)) {
+                return [
+                    'status' => 'failed',
+                    'message' => '新密钥已生成，但热重载失败（旧配置仍在运行）: ' . ($reloadOutput !== '' ? $reloadOutput : '未收到服务响应')
+                ];
+            }
             $maskedSecret = trim((string)$backend->configdRun('mihomo secret-masked'));
             return [
                 'status' => 'ok',
