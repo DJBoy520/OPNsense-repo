@@ -163,10 +163,21 @@ mihomo_lib_compose() {
         return 1
     fi
     if ! grep -q '__MIHOMO_PROXIES__' "$MIHOMO_TEMPLATE_FILE" || \
-       ! grep -q '__MIHOMO_NODE_NAMES__' "$MIHOMO_TEMPLATE_FILE" || \
-       ! grep -q '__MIHOMO_CUSTOM_RULES__' "$MIHOMO_TEMPLATE_FILE"; then
-        echo "错误：模板文件缺少占位符：__MIHOMO_PROXIES__、__MIHOMO_NODE_NAMES__ 或 __MIHOMO_CUSTOM_RULES__" >&2
+       ! grep -q '__MIHOMO_NODE_NAMES__' "$MIHOMO_TEMPLATE_FILE"; then
+        echo "错误：模板文件缺少占位符：__MIHOMO_PROXIES__ 或 __MIHOMO_NODE_NAMES__" >&2
         return 1
+    fi
+    # 自定义规则占位符向后兼容：旧模板（1.0.4 及用户自定）可能没有
+    # __MIHOMO_CUSTOM_RULES__（F4 快照恢复会保留旧模板）——此时降级为
+    # 注入到 rules: 顶层键之后，而不是拒绝服务
+    _rules_mode="placeholder"
+    if ! grep -q '__MIHOMO_CUSTOM_RULES__' "$MIHOMO_TEMPLATE_FILE"; then
+        if ! grep -q '^rules:[[:space:]]*$' "$MIHOMO_TEMPLATE_FILE"; then
+            echo "错误：模板既无 __MIHOMO_CUSTOM_RULES__ 占位符也无 rules: 顶层键，无法注入自定义规则" >&2
+            return 1
+        fi
+        _rules_mode="fallback"
+        echo "提示：模板缺少 __MIHOMO_CUSTOM_RULES__ 占位符，自定义规则将注入到 rules: 之后" >&2
     fi
 
     # b) 提取节点名称并进行占位符替换
@@ -187,7 +198,7 @@ mihomo_lib_compose() {
 
     _tmp_step1="$(mktemp "$_compose_tmp_dir/comp1.XXXXXX" 2>/dev/null || mktemp /tmp/comp1.XXXXXX)"
 
-    awk -v proxies_file="$_proxies_file" -v names_file="$_tmp_names" -v rules_file="$_rules_src" '
+    awk -v proxies_file="$_proxies_file" -v names_file="$_tmp_names" -v rules_file="$_rules_src" -v rules_mode="$_rules_mode" '
       /^[[:space:]]*#[[:space:]]*__MIHOMO_PROXIES__[[:space:]]*$/ {
           while ((getline line < proxies_file) > 0) print line
           close(proxies_file)
@@ -201,6 +212,16 @@ mihomo_lib_compose() {
       /^[[:space:]]*#[[:space:]]*__MIHOMO_CUSTOM_RULES__[[:space:]]*$/ {
           while ((getline line < rules_file) > 0) {
               # 空行跳过；注释行原样缩进保留；规则行补 YAML 列表前缀（校验器存的是裸规则）
+              if (line ~ /^[[:space:]]*$/) continue
+              if (line ~ /^[[:space:]]*#/) { print "  " line } else { print "  - " line }
+          }
+          close(rules_file)
+          next
+      }
+      # fallback 模式：模板没有占位符时，把自定义规则插到 rules: 顶层键之后
+      rules_mode == "fallback" && /^rules:[[:space:]]*$/ {
+          print
+          while ((getline line < rules_file) > 0) {
               if (line ~ /^[[:space:]]*$/) continue
               if (line ~ /^[[:space:]]*#/) { print "  " line } else { print "  - " line }
           }

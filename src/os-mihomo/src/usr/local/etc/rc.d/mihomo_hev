@@ -55,6 +55,22 @@ mihomo_hev_start()
         rm -f "${pidfile}"
     fi
 
+    # 3b. 防呆：tun 设备残留处理。无地址且未 UP 的是上次异常退出留下的僵尸设备，
+    #     直接销毁；UP/RUNNING 或带地址的说明有活进程占用（如生产旧 hev 栈），
+    #     拒绝启动并提示迁移步骤，防止误把外部设备当作自己的就绪状态。
+    if ifconfig "${tun_dev}" >/dev/null 2>&1; then
+        _zombie="$(ifconfig "${tun_dev}" | awk '/^[[:space:]]*inet[[:space:]]/{found=1} /UP,/{up=1} END{exit !(found || up)}')"
+        if [ "${_zombie}" -eq 0 ]; then
+            echo "提示：发现残留的空 ${tun_dev} 僵尸设备，自动销毁后继续。"
+            ifconfig "${tun_dev}" destroy 2>/dev/null || true
+        else
+            echo "错误：${tun_dev} 处于活跃状态但 ${name} 未在运行（疑似外部 hev/残留进程占用）。" >&2
+            echo "  请先停用占用 ${tun_dev} 的外部服务（迁移手册：停 xray_proxy/hev_socks5_tunnel 等）后重试。" >&2
+            ifconfig "${tun_dev}" | head -3 >&2
+            return 1
+        fi
+    fi
+
     # 4. 用 daemon 启动 hev-socks5-tunnel（配置是位置参数；script(1) 提供 pty；-p 记录子进程 pid）
     echo "正在启动 ${name}..."
     /usr/sbin/daemon -p "${pidfile}" -f -t "${name}" "${script_bin}" -q /dev/null "${bin}" "${conf}"

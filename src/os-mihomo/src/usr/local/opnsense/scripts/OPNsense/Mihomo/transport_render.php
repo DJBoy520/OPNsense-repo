@@ -144,6 +144,16 @@ function run_ifconfig(string $arguments): ?string
 
 function ifconfig_inet(string $device): ?string
 {
+    $info = ifconfig_inet_info($device);
+    return $info === null ? null : $info['ip'];
+}
+
+/**
+ * 从 ifconfig 实时取 IPv4 地址与前缀长度（DHCP 或 config.xml 无 subnet 时使用）。
+ * 返回 ['ip' => ..., 'prefix' => 0..32] 或 null。
+ */
+function ifconfig_inet_info(string $device): ?array
+{
     if (!is_valid_iface($device)) {
         return null;
     }
@@ -151,9 +161,31 @@ function ifconfig_inet(string $device): ?string
     if ($output === null) {
         return null;
     }
+    if (preg_match('/^[ \t]*inet[ \t]+([0-9.]+)[ \t]+netmask[ \t]+(0x[0-9a-fA-F]+|[0-9.]+)/m', $output, $matches) === 1) {
+        if (!is_valid_ipv4($matches[1])) {
+            return null;
+        }
+        $prefix = 32;
+        $maskText = $matches[2];
+        if (preg_match('/^0x/i', $maskText) === 1) {
+            $long = (int)hexdec(substr($maskText, 2));
+            $prefix = 0;
+            for ($bit = 31; $bit >= 0; $bit--) {
+                if ((($long >> $bit) & 1) === 1) {
+                    $prefix++;
+                } else {
+                    break;
+                }
+            }
+        } elseif (strpos($maskText, '.') !== false) {
+            $decoded = mask_to_prefix($maskText);
+            $prefix = $decoded === null ? 32 : $decoded;
+        }
+        return ['ip' => $matches[1], 'prefix' => $prefix];
+    }
     if (preg_match('/^[ \t]*inet[ \t]+([0-9.]+)/m', $output, $matches) === 1) {
         if (is_valid_ipv4($matches[1])) {
-            return $matches[1];
+            return ['ip' => $matches[1], 'prefix' => 32];
         }
     }
     return null;
@@ -231,24 +263,24 @@ function load_config_interfaces(): array
         }
 
         $ipaddr = trim((string)$interface->ipaddr);
-        if ($ipaddr === '') {
-            continue;
-        }
-        if (strtolower($ipaddr) === 'dhcp') {
-            $resolved = ifconfig_inet($device);
+        $isDhcp = strtolower($ipaddr) === 'dhcp';
+        if ($isDhcp) {
+            $resolved = ifconfig_inet_info($device);
             if ($resolved === null) {
                 continue;
             }
-            $ipaddr = $resolved;
+            $ipaddr = $resolved['ip'];
         }
         if (!is_valid_ipv4($ipaddr)) {
             continue;
         }
 
         $subnet = trim((string)$interface->subnet);
-        $prefix = mask_to_prefix($subnet);
-        if ($prefix === null) {
-            fail('接口 ' . $keyName . ' 的子网掩码无效：' . $subnet);
+        $prefix = $subnet === '' ? null : mask_to_prefix($subnet);
+        if ($prefix === null || $isDhcp) {
+            // DHCP 接口或配置缺 subnet：以 ifconfig 实时掩码为准，仍取不到才退 /32
+            $live = ifconfig_inet_info($device);
+            $prefix = $live === null ? 32 : $live['prefix'];
         }
         $cidr = ipv4_to_cidr($ipaddr, $prefix);
         if ($cidr === null) {
