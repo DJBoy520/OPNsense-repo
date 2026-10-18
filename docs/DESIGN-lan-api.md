@@ -1,110 +1,106 @@
-# DESIGN: external-controller 地址与端口可配置（v3.1 简化方案）
+# DESIGN: external-controller 地址与端口可配置（v3.2 简化方案）
 
-状态：v3.1（v3 + 用户追加指令"硬编码不要有，最好都能做成用户可配置"；待 Gemini + DeepSeek 审计）
+状态：v3.2（吸收第三轮审计：Gemini BLOCK 10 条 / DeepSeek BLOCK 26 条，确认 11 条含 9 条阻断级——全部吸收；方向本身（可配置）未被任何发现挑战）
 日期：2026-10-18
-v3 → v3.1：**端口 9090 一并做成用户配置项（api_port）**；代码中全部 22 处 9090 字面量（11 个文件）改为配置驱动，零散硬编码清零；内部链路端口（7891/1053/7890）明确"单一真源 + 配置驱动探测、暂不暴露为用户配置"的策略与理由。
-决策记录：PF CIDR 方案（v1/v2/v2.1）经两轮审计 34+20 条发现、5 条 HIGH，复杂度与家庭单 LAN 场景收益严重不成比例，用户裁定改为"绑定地址面板直配"。本版为完整重写，PF 相关设计全部废弃。
+版本史：v1/v2 PF CIDR（两轮 5 HIGH，废弃）→ v3 绑定直配 → v3.1 端口可配+零硬编码 → **v3.2 九条阻断吸收**（端口校验改 IntegerField、断言精确化+负向+轮询、secret 有效值门禁、端口 deny-list 硬拒、控制面/数据面解耦、apply-then-persist 时序、transport 门禁与清单修正、迁移与文档同步）。
 关联：目标版本 1.0.8。
 
-## 1. 目标与产品语义
+## 1. 目标与产品语义（不变）
 
-- 面板提供"**API 绑定地址**"（`general.api_bind`，默认 `127.0.0.1`，可为接口 IP 或 `0.0.0.0`）与"**API 端口**"（`general.api_port`，默认 `9090`，1-65535）两个配置项——**地址与端口都不再是硬编码**。
-- 渲染语义 = mihomo 原生 socket 绑定：`127.0.0.1` 仅本机；接口 IP 仅发往该地址的连接（LAN 侧可达、WAN IP/其他接口 IP 连不上）；`0.0.0.0` 全接口（实测 tcp46 双栈）。
-- **不做任何 PF/防火墙改动**；无 SSH 隧道强依赖（LAN IP 绑定下 metacubexd 直接指向 `http://<LAN IP>:9090`）。
-- secret 仍是唯一认证层；**绑定非 127.0.0.1 时强制要求 secret 已配置**（保存前置拦截）。
-- 最高约束不变：不引入断网 / WebGUI 失联 / DNS 失效；失败方向天然 fail-closed（渲染失败 = 保持旧值 = 最多"没放开"）。
+- 面板配置 `general.api_bind`（默认 127.0.0.1；可为本机接口 IP / 0.0.0.0）与 `general.api_port`（默认 9090）。
+- 渲染语义 = mihomo 原生 socket 绑定；**不做任何 PF 改动**；无 SSH 隧道强依赖。
+- secret 是唯一认证层；**渲染非回环绑定的每一层都以 config.yaml 中实际生效的 secret 为准**（见 §2.2.0）。
+- 最高约束：不断网 / WebGUI 失联 / DNS 失效；**管理面（API）故障不得连坐数据面（代理+DNS）**（见 §2.6，第三轮 HIGH 修正）。
 
 ## 2. 行为定义
 
-### 2.1 值域与校验
+### 2.1 值域与校验（端口部分重写）
 
-- 值域：合法 IPv4 单地址（`127.0.0.1`、`0.0.0.0`、本机已分配的接口 IP）。**不接受 CIDR、不接受主机名**（mihomo bind 需要字面 IP）。
-- api_bind 三层校验：
-  1. 模型 `<Mask>`：`/\A(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\z/`（**带分隔符**——v2.1 复审实测无分隔符 preg_match 直接报错；拒绝换行/空格/CIDR）。
-  2. 控制器（GeneralController 覆盖的 setAction 内，**两条路由都覆盖**）：filter_var(FILTER_VALIDATE_IP) 复核。
-  3. 渲染脚本：本机地址核验——`0.0.0.0`/`127.0.0.1` 直接放行；其余必须出现在 `ifconfig -a` 的 inet 列表（**防 bind 非本机地址导致 API listener 整个起不来**），核验失败报错不渲染。
-- api_port 校验：模型 IntegerField/OptionField 或 Mask（`/\A([1-9]\d{0,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\z/`）+ 控制器 int 范围复核；**保留端口（<1024）与已知占用端口（OPNsense WebGUI/SSH）拒绝或告警**；改端口后 metacubexd 侧地址需同步（文案明示）。
-- 非法值拒绝保存并报错（不静默回落）。
+- api_bind：模型 `<Mask>`（带分隔符 IPv4 正则）→ 控制器 filter_var → 渲染脚本本机地址核验（`ifconfig -a` 以 awk `$1=="inet" && $2==addr` 精确匹配，防 inet6/netmask 子串误配）。
+- **api_port：IntegerField + `<MinimumValue>1024</MinimumValue> <MaximumValue>65535</MaximumValue>`**（废除 v3.1 的 Mask 正则——其实测放行 65536-99999 的笔误已被第三轮审计抓包；IntegerField 与仓库 DynDNS.xml 先例一致）。
+- **端口 deny-list 硬拒绝（三层执行：模型范围 + 控制器 + 渲染脚本）**：
+  - <1024（mihomo 以 root 运行，重启竞速会抢占 sshd/lighttpd → SSH/WebGUI 失联，红线）；
+  - 插件自身内部端口 1053 / 7890 / 7891（listener 冲突 + 断言误判）；
+  - 系统实际端口：动态读 config.xml 的 `system.webgui.port`（空则按协议 80/443）与 `system.ssh.port`（默认 22）。
+  - 拒绝即返回 validation 错误不落盘（"拒绝或告警"的二义性废除——一律硬拒）。
+- 非法值拒绝保存并报错；测试矩阵覆盖 1/22/80/443/1023/1024/1053/7890/7891/65535/65536/99999。
 
-### 2.2 渲染与生效
+### 2.2 渲染与生效（断言与事务性重写）
 
-- 沿用密钥轮换同款 sed 模式：`config.yaml` 与 `sub/template_config.yaml` 的 `^external-controller:` 行改为 `<bind>:<port>`；**写后 `grep -qF "external-controller: <bind>:<port>"` 校验，失败指名报错 exit 1**；行缺失先补末行换行再追加；目标文件缺失跳过并报错。
-- 生效：mihomo 运行中才 `service_manager.sh reload`（SIGHUP 已实测重建 listener 含绑定地址），随后 **sockstat 断言**：`sockstat -l -p <port>`（**不带 -4**——tcp46 实测教训），匹配 `*:<port>` 或 `<bind>:<port>` 或 `127.0.0.1:<port>`；断言失败 → **自动回滚为旧 bind:port + reload + 再次断言**，仍失败 exit 1 并把摘要写 stdout（configd script_output 只回传 stdout）。
-- mihomo 未运行：只改文件，不 reload、不 start（避免拉起停用的服务）。
-- 订阅更新：模板已改，compose 直通继承。
-- 锁：写两文件必须持有 `/var/run/mihomo-sub.lock`（复用 secret_manager 同款锁协议；GUI 场景 5s×3 短等待，busy 输出明确错误）。
+**2.2.0 secret 有效值门禁（前置）**：渲染非 127.0.0.1 前，解析 config.yaml 的 `^secret:` **实际值**（mihomo 只认 config.yaml，不认 secret.key）：
+- 非空 → 放行；
+- 空但 secret.key 有值 → 锁内先调用 secret_manager 落地逻辑同步四处，再复检；
+- 仍空 → 拒绝渲染非回环绑定（exit 1，指明原因）。控制器保存前置检查同一有效值口径（不再以 secret.key 存在性判定）。
 
-### 2.3 配置驱动探测——零硬编码改造（唯一成规模的改动，审计重点核对覆盖完整性）
+**2.2.1 事务性写入**：锁内对 config.yaml 与 template 先做 0600 备份；任一步失败（grep 写后校验 / 第二文件写 / reload / 断言）→ 从备份恢复两文件并复验；恢复也失败 → 输出明确的手工恢复指引并写持久告警文件，exit 1。锁持有到事务结束（含回滚）。
 
-现状盘点：仓库内 **22 处 9090 字面量散布在 11 个文件**（含探测代码、安装/订阅脚本提示文案、死码 anchor、面板文案）；内部链路端口 7891/1053 也散布 6 个文件。统一改造规则：
+**2.2.2 生效断言（精确化，废除 OR 匹配）**：
+- reload 后**有界轮询**（10-30s、0.5s 间隔；不再依赖 do_reload 内部 sleep 1）；
+- `sockstat -l -p <port>`（不带 -4）**按期望 bind 精确匹配**：0.0.0.0 → `(\*|0.0.0.0):<port>`；127.0.0.1 → 仅 `127.0.0.1:<port>`；接口 IP → 仅 `<bind>:<port>`。**严禁 127.0.0.1 兜底 OR**（假阳性使回滚机制失效）；
+- 按 mihomo 进程（PID/命令）限定行，防同端口其他进程串扰；
+- **负向断言**：旧 bind:port 监听必须消失（收窄场景旧通配不消失 = 失败）；
+- 回滚路径复用同一双向断言。
 
-1. **单一读取口径**：新增共享辅助（sub_lib.sh 导出 shell 函数 + system_status.py 内同名逻辑）：从 config.yaml 的 `^external-controller:` 行解析 `bind:port`；`0.0.0.0` 归一化为 `127.0.0.1` 供探测；解析失败回落 `127.0.0.1:9090` 并记告警（config.yaml 缺失/损坏时探测兜底）。
-2. **全部消费点改造**（grep 清单，实施后以 `grep -rn '9090' src | grep -v tests | grep -v docs` 归零为验收）：
-   - service_manager.sh（check_api_ready/do_healthcheck 的 curl URL 与 sockstat）
-   - watchdog.sh（API 探测，fail-open 判据）
-   - system_status.py（API_PORT 及探测 URL）
-   - transport_manager.sh、setup.sh、sub.sh（探测/提示文案改动态值）
-   - +POST_INSTALL（port_up 健康门禁按解析值探测）
-   - setup_firewall.php 死码 anchor 内的 9090 规则：**该 anchor 本就是无人调用的死码，直接删除规则块**（不新增消费）
-   - index.volt / GeneralController 文案中的 9090 与 `:9090/ui/` 提示：改为随 api_bind/api_port 动态渲染
-   - config.yaml.sample 同步默认值
-3. **内部链路端口策略（7891 socks / 7890 mixed / 1053 DNS）**：同样消除散布字面量——单一真源 = config.yaml/template 的对应监听段，探测代码从配置解析；**本版不暴露为用户配置项**，理由：这些端口是跨组件接线（hev-socks5-tunnel 上游、AdGuardHome 上游各持有对端配置，均为插件红线"不拥有"的文件），暴露旋钮而无编排会静默断链；确有需求时作为独立编排特性另行设计。此取舍如实写入面板文档。
+**2.2.3 时序（apply-then-persist）**：api-bind-apply 成功后才写 panel-state / 才算保存生效；失败时**回滚模型值**（或记录 desired/applied 两态并在面板展示差异）；setGeneralAction 在 apply 失败时**跳过**后续 restart 分支（防 do_start reconcile 按模型把失败值再次应用 → 服务 FAILED 的链条）。
 
-### 2.4 生命周期
+### 2.3 配置驱动探测——零硬编码（清单修正）
+
+真实盘点（第三轮审计核实）：**33 处 9090 / 13 个文件**（src+packaging，不含 GeoSite.dat；v3.1 写的 22/11 低估，已修正）；内部端口散布 16 个文件。归零口径：`grep -rn 9090 src packaging | grep -v tests | grep -v '\.dat'`（README/docs 的陈述性文字另行同步，不计入归零）。
+
+- 单一读取口径：sub_lib.sh 导出 helper + system_status.py 同逻辑（解析 `^external-controller:` 的 bind:port；0.0.0.0 → 127.0.0.1 探测；接口 IP → 探测该 IP；解析失败回落 127.0.0.1:9090 + 告警）。
+- 消费点（按风险排序）：
+  1. **transport_manager.sh mihomo_healthy()（最高优先——透明代理 enable/recover 的门禁）**：硬编码 `(127.0.0.1|\*|0.0.0.0):9090` 正则改配置驱动（改 LAN IP/端口会导致透明代理彻底无法重挂，第三轮 HIGH）；
+  2. +POST_INSTALL port_up：去 `-4`、动态解析（含 LAN IP 形态；否则升级后健康门禁必失败并阻断传输层恢复）；
+  3. service_manager（check_api_ready/do_healthcheck）、watchdog、system_status.py、setup.sh、sub.sh 文案；
+  4. scripts/opnsense/verify.sh、rescue.sh（运维脚本，改解析或明确标注默认值适用）；
+  5. setup_firewall.php 死码 9090 规则块删除，**同步更新 test_pf_rules.sh 的旧断言**；test_socks_mode.sh 的 watchdog 1053 断言同步；
+  6. index.volt 文案动态化（getGeneral 带 api_bind/api_port；0.0.0.0 显示推导 LAN IP 而非字面 0.0.0.0）；config.yaml.sample 同步。
+- +POST_INSTALL 内嵌 manifest **禁 % 字符**约束重申（新探测逻辑 source helper 或零 %）。
+- 内部端口（1053/7890/7891）：探测改从 config 解析；hev.yaml.sample / setup_unbound.php 中的引用标注"不受管耦合"（本版不改其值）。
+
+### 2.4 生命周期（时序修正）
 
 | 事件 | 行为 |
 | --- | --- |
-| 面板保存 | 幂等渲染（每次保存都执行，不只变化时——防快照/HA 回写漂移） |
-| do_start | reconcile：config.yaml 绑定 != panel-state 记录 → 按模型重渲染（mihomo 启动前，失败仅告警不阻断启动——方向 fail-closed） |
-| +POST_INSTALL | 快照恢复后、`service mihomo restart` **前**：reconcile 一次（此时未运行，只改文件）；port_up 门禁用适配后的探测 |
-| 订阅更新 | 模板继承，无需处理 |
-| 卸载 | 无 PF 遗留；随配置删除，无清理动作 |
-| LAN IP 变化（DHCP） | 文档明示绑定 LAN IP 应使用静态地址；IP 变化后 mihomo 启动 bind 失败 → API down（方向 fail-closed），面板改新地址保存即恢复 |
+| 面板保存 | 前置校验（§2.1 deny-list + §2.2.0 secret 有效值）→ setAction 落盘 → api-bind-apply → **成功才写 panel-state**；失败回滚模型 + 跳过 restart（§2.2.3） |
+| do_start | reconcile 插入点：already-running 早返回**之后**、`mihomo -t` 校验之前；持锁、永不非 0 退出（set -eu 安全）、失败仅告警（fail-closed 方向） |
+| +POST_INSTALL | 快照恢复 → sample 兜底后**强制 secret apply**（防 secret.key 有值而 config 为空）→ reconcile（restart 前，未运行只改文件）→ 健康门禁（动态探测） |
+| **升级迁移（新增）** | 首次升级到 1.0.8：把 config.yaml 现有 external-controller（bind+port）**导入模型**（如 VM 现存 0.0.0.0），避免"面板显示 127 默认值而运行态是通配"的认知错位与静默收窄 |
+| 订阅更新 | 模板继承 |
+| LAN IP 变化 | 绑定失败时按 §2.6 降级处理（不杀服务） |
 
-### 2.5 面板与文案（如实原则）
+### 2.5 面板与文案
 
-- forms/general.xml：移除 lan_api 复选框；新增"API 绑定地址"输入框（placeholder 预填推导的 LAN IP；help 写明三档语义：127.0.0.1 仅本机 / 接口 IP 该网段可用 / 0.0.0.0 全接口含 WAN，以及"非 127.0.0.1 时 `/ui/` 静态页免密可达、API 走 Bearer 明文 HTTP"的如实警示）。
-- Mihomo.xml：**移除死字段 lan_api**（历史配置中的残留值被 OPNsense 模型忽略，无迁移动作）；新增 api_bind。
-- getGeneral：general 子树返回 api_bind；前端 Show Secret / metacubexd 指引文案与绑定地址联动显示（"当前地址 http://<bind>:9090，bind=127.0.0.1 时提示 SSH 隧道用法"）。
+同 v3.1（动态地址+端口显示、/ui/ 免密与明文 Bearer 如实声明、0.0.0.0 显示推导 LAN IP、metacubexd/内置面板名称统一），文案中的 9090/127 字面量全部随动。
 
-## 3. 安全事实（如实声明，不做隐瞒）
+### 2.6 控制面/数据面解耦（第三轮最重要 HIGH，对现有状态机的定向修改）
 
-- 非 127.0.0.1 绑定后：API（需 secret）与 `/ui/` 静态资源（**免密**）对可达来源开放。
-- Bearer 密钥走明文 HTTP：LAN 信任边界内的已知接受风险（同网段嗅探/ARP 欺骗可截获）；如需更高保障属独立特性（TLS/反代），本版不做。
-- `0.0.0.0` 含 WAN 接口：外部屏障是 OPNsense 默认 WAN 拒绝；**推荐单 LAN 用户绑定 LAN IP 而非 0.0.0.0**（文案引导）。
-- 密钥轮换能力（v1.0.7）与绑定改动共用同一把锁，互不覆盖。
+现状：API 探测是 do_start 与 watchdog 的**致命判据**——check_api_ready 30s 超时 → do_stop_internal；watchdog API 不可达 → trigger_failopen 杀进程。在 127.0.0.1 时代"API 死≈核心死"成立；绑定可变后（LAN IP/DHCP 漂移/接口就绪时序），API 不可达不再蕴含核心死亡，误杀会连带 1053 DNS 挂掉——违反"不 DNS 失效"红线。
 
-## 4. 改动文件清单
+修改：
+1. **fail-open 判据改为数据面**：socks（7891，从 config 解析）+ DNS（1053）探测为致命判据；API 探测降级为"连续 N=3 次失败 → 告警 + 触发 reconcile"（不再杀进程）。
+2. do_start：check_api_ready 失败不再 do_stop——改回退渲染 127.0.0.1 并重载一次；仍失败则**继续运行**（数据面为准）+ 告警。
+3. 实施后 VM 回归两条硬断言：**杀 API 不杀服务（DNS/代理存活）；杀 socks/DNS 仍正常 fail-open**（原语义保持）。
 
-| 文件 | 改动 |
-| --- | --- |
-| models/OPNsense/Mihomo/Mihomo.xml | 移除 lan_api；新增 api_bind（Mask）与 api_port |
-| controllers/.../forms/general.xml | api_bind/api_port 输入框 + 如实文案；移除旧复选框 |
-| Api/GeneralController.php | setAction 内前置校验（IP/端口合法 + 非 127 需 secret）+ 保存后 api-bind-apply；getGeneral 附带两字段；文案动态化 |
-| scripts/OPNsense/Mihomo/api_bind_manager.sh | **新增**（锁 → 本机地址核验 → 双文件 sed+校验 → reload+sockstat 断言+回滚） |
-| scripts/OPNsense/Mihomo/service_manager.sh | healthcheck/check_api_ready 探测地址适配 |
-| scripts/OPNsense/Mihomo/watchdog.sh | API 探测地址适配 |
-| scripts/OPNsense/Mihomo/system_status.py | API 探测地址适配 |
-| packaging/freebsd/+POST_INSTALL | port_up 配置驱动 + restart 前 reconcile + chmod 列表 |
-| service/conf/actions.d/actions_mihomo.conf | [api-bind-apply]（%s 只在 parameters 行） |
-| tests/* | 校验矩阵（bind/port）、渲染/回滚/断言、配置驱动探测（含 9090 字面量归零守卫）、内部端口读取 |
+## 3. 安全事实（增补 IPv6 与既有规则例外）
 
-## 5. 验收清单
+- 0.0.0.0 实测 tcp46 双栈：**IPv4+IPv6 通配、含 WAN v6**；"WAN 默认拒绝"仅在无显式 WAN pass 规则时成立——面板文案如实写明并推荐绑定 LAN IP。
+- 其余同 v3.1（/ui/ 免密、Bearer 明文、secret 有效值门禁）。
 
-1. 默认 127.0.0.1：行为与现状完全一致（本地 curl 200、LAN 拒绝）。
-2. 改 LAN IP：LAN curl 带 secret 200 / 不带 401；`127.0.0.1:9090` 不再监听；healthcheck/watchdog/status 全绿（探测适配生效）；SSH 隧道改指 LAN IP 可用。
-3. 改 0.0.0.0：`tcp46 *:9090`；WAN 侧依赖默认拒绝（无需任何 mihomo anchor）。
-3b. 改端口（如 19090）：旧 9090 不再监听、新端口按 bind 语义可达；探测/门禁/面板文案全部随动；`grep -rn 9090 src`（除默认值与测试）归零。
-3c. 内部端口探测从 config 解析（7891/1053 改名场景探测仍工作）。
-4. secret 未配置时改绑 → 拒绝并引导。
-5. 绑定非本机地址（如 10.9.9.9）→ 渲染脚本本机核验拒绝。
-6. reload 断言失败注入 → 自动回滚旧绑定。
-7. 订阅 Update Now、重启（装盘 VM）、pkg 升级后绑定保持且探测全绿。
-8. secret 轮换与绑定改动并发：锁保护下无相互覆盖。
-9. 停服（enabled=0）状态下改绑定：只改文件，服务不被拉起，下次启动生效。
-10. 面板文案与实际行为一致（/ui/ 免密、明文 Bearer 声明）。
+## 4. 改动文件清单（修正）
 
-## 6. 与被否方案的对照（决策存档）
+v3.1 基础上增补：**transport_manager.sh（门禁级，最高优先）**、scripts/opnsense/{verify,rescue}.sh、tests/{test_pf_rules,test_socks_mode}.sh 断言同步、+POST_INSTALL（secret 强制 apply / reconcile 前置 / % 禁令）、mihomo_setup.php 或 +POST_INSTALL 内做**升级迁移**、全部文档陈述同步（SECURITY/TRANSPARENT-PROXY/FAIL-OPEN/WEBGUI/README 的"强制 127.0.0.1"表述更新为"默认 127.0.0.1，可配置"）。
 
-- v1/v2/v2.1（PF CIDR）：两轮审计 5 条 HIGH（anchor 不物化、重启裸奔、WAN 伪造、引用缺失、block 脱靶）+ 生命周期状态机复杂度失控 → 废弃。
-- 本方案把访问控制从"防火墙规则生命周期"降维为"socket bind 语义"，失败方向天然 fail-closed；精确多网段白名单如有真实需求，属未来独立特性。
+## 5. 验收清单（增补）
+
+v3.1 十项全部保留，另增：
+11. 端口 deny-list 矩阵（22/80/443/8443/1053/7890/7891/1023/65536/99999 全拒；1024 与正常端口通过）。
+12. 断言负向：0.0.0.0 收窄到 127 后 `*:port` 必须消失才判成功。
+13. 旧 0.0.0.0 安装升级：模型导入、面板显示与运行态一致。
+14. **解耦回归：kill API → 服务/DNS/代理存活且告警；kill socks → 正常 fail-open**。
+15. transport enable/recover 门禁在 LAN IP + 自定义端口绑定下通过（透明代理可重挂）。
+16. 归零断言：`grep -rn 9090 src packaging | grep -v tests | grep -v '\.dat'` 为空。
+
+## 6. 决策存档
+
+三轮审计轨迹：PF 方案因机制性风险废弃 → 绑定直配方向三轮未被动摇 → 剩余发现全部为实现契约（校验/断言/时序/解耦/清单），已逐条吸收为本版各节。**实施采用编码工作流：门禁测试先行 + 交叉审计 + 主控 VM 回归（含 §5.14 解耦行为）**。
