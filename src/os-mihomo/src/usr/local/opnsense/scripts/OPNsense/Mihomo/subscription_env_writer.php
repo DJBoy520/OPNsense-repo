@@ -85,9 +85,10 @@ if (count($args) !== 3) {
 list($url, $autoUpdate, $interval) = $args;
 
 /* configd 对 %s 参数做 shell 展开，'&' 等元字符会截断命令——
- * 调用方（控制器/setup.sh）必须以 'b64:' 前缀 + base64 传 URL */
+ * 调用方（控制器/setup.sh）必须以 'b64:' 前缀 + base64 传 URL。
+ * CLI 侧 base64(1) 默认按 76 列折行，解码前先剥离全部空白。 */
 if (strncmp($url, 'b64:', 4) === 0) {
-    $decoded = base64_decode(substr($url, 4), true);
+    $decoded = base64_decode(preg_replace('/\s+/', '', substr($url, 4)), true);
     if ($decoded === false || $decoded === '') {
         fail('b64: 前缀的订阅地址 base64 解码失败');
     }

@@ -174,15 +174,82 @@ class GeneralController extends ApiMutableModelControllerBase
         return $command . ': ' . $text;
     }
 
+    /**
+     * 返回面板登录用的完整密钥（9090 external-controller）
+     * 仅 page-services-mihomo* ACL 可达；与订阅 URL 不同，密钥必须能被
+     * 管理员查看/复制，否则无法登录内置面板。
+     */
+    public function secretRevealAction()
+    {
+        $secret = trim((string)(new Backend())->configdRun('mihomo secret-get'));
+        if ($secret === '') {
+            return ['status' => 'failed', 'message' => '尚未配置 API 密钥'];
+        }
+        return ['status' => 'ok', 'secret' => $secret];
+    }
+
+    /**
+     * 设置自定义密钥（b64 经 configd 传给 secret_manager.sh set），并热加载生效
+     */
+    public function secretSetAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed', 'message' => '仅接受 POST 请求'];
+        }
+
+        $secret = (string)$this->request->getPost('secret');
+        $nested = $this->request->getPost('mihomo');
+        if (($secret === '' || $secret === null) && is_array($nested) && isset($nested['secret'])) {
+            $secret = (string)$nested['secret'];
+        }
+        $secret = trim((string)$secret);
+
+        $length = strlen($secret);
+        if ($length < 4 || $length > 128) {
+            return ['status' => 'failed', 'message' => '密钥长度需在 4~128 个字符之间'];
+        }
+        if (preg_match('/\A[A-Za-z0-9._~@#%^+=:;,!?*-]+\z/', $secret) !== 1) {
+            return [
+                'status' => 'failed',
+                'message' => '密钥仅允许字母数字与 . _ ~ @ # % ^ + = : ; , ! ? * -'
+            ];
+        }
+
+        $backend = new Backend();
+        $output = (string)$backend->configdpRun(
+            'mihomo secret-set',
+            ['b64:' . base64_encode($secret)]
+        );
+        if (stripos($output, 'OK') === false) {
+            return ['status' => 'failed', 'message' => '写入密钥失败: ' . trim($output)];
+        }
+
+        // SIGHUP 热加载：mihomo 重读 config.yaml，新密钥立即生效
+        $reloadOutput = trim((string)$backend->configdRun('mihomo reload'));
+        $masked = trim((string)$backend->configdRun('mihomo secret-masked'));
+
+        return [
+            'status' => 'ok',
+            'message' => 'API 密钥已更新' . ($reloadOutput !== '' ? '（' . $reloadOutput . '）' : ''),
+            'secret_masked' => $masked !== '' ? $masked : 'CONFIGURED',
+        ];
+    }
+
     public function regenerateSecretAction()
     {
         if ($this->request->isPost()) {
             $backend = new Backend();
             $genOutput = trim((string)$backend->configdRun('mihomo secret-generate'));
+            if (stripos($genOutput, 'OK') === false) {
+                return ['status' => 'failed', 'message' => '生成密钥失败: ' . $genOutput];
+            }
+            $reloadOutput = trim((string)$backend->configdRun('mihomo reload'));
             $maskedSecret = trim((string)$backend->configdRun('mihomo secret-masked'));
             return [
                 'status' => 'ok',
-                'message' => $genOutput,
+                'message' => $genOutput . ($reloadOutput !== '' ? '；已热加载 mihomo' : ''),
+                /* 新密钥仅在本次响应中完整返回一次，供面板立即复制登录 */
+                'secret' => trim((string)$backend->configdRun('mihomo secret-get')),
                 'secret_masked' => $maskedSecret ?: 'CONFIGURED'
             ];
         }

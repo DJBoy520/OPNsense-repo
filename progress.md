@@ -37,3 +37,22 @@
 6. `tests/test_unbound_integration.sh`：**PASS**（Unbound DNS 联动与故障恢复）
 7. `tests/test_subscription_privacy.sh`：**PASS**（零公网第三方转换、强制标准 TLS 校验）
 8. `scripts/build.sh && scripts/verify-package.sh`：**PASS**（全量 33 个文件 SHA256 校验 100% 通过，包大小 23,070,073 bytes）
+
+---
+
+## 2026-10-18 · v1.0.6：VM 实测三项修复 + 9090 面板密钥 UI（用户报障闭环）
+
+**用户报障**（VM 192.168.30.159，OPNsense 26.7 live ISO）：① 订阅保存报「订阅设置已保存，但写入 sub/env 失败: <UUID>」；② Rules/Status/Logs 三页 Page not found（横幅为 live media 预期提示，非缺陷）；③ 9090 面板要密钥但界面无法查看/修改。
+
+根因与修复：
+1. **26.7 configd API 语义**：`Backend::configdRun($event, $detach, ...)` 第二参是 detach，插件按旧签名传参数数组 → detach=true → configd 走异步 execute 只回 job UUID（即报错里的 UUID）。带参数必须走 `configdpRun($event, $params[])`（shlex 安全引号）。SubscriptionController 3 处已改。
+2. **configd 动作格式**：`%s` 占位符只能出现在 `parameters:` 模板行；command 行里的 `%s` 会原样传给脚本占住 argv（字面 `%s` + 追加参数 = 参数错位，exit 64 → Execute error）。修了 sub-env-write / setup-cron / config-atomic-update / log 四个动作（log 改为 `command:tail` + `parameters:-n %s ...` 前置模板）。
+3. **页面路由**：OPNsense `/ui/{module}/{controller}` 按控制器文件名解析，IndexController 上的 rulesAction/statusAction/logsAction 永远不可达。新增 RulesController/StatusController/LogsController 页面控制器（Firewall 模块同模式），三页实测 200。
+4. **9090 面板密钥 UI**：General 页新增「Dashboard API Secret」卡片——掩码展示 / 查看明文 / 一键生成（新密钥仅完整显示一次）/ 自定义设置（4~128 位，白名单字符集 `A-Za-z0-9._~@#%^+=:;,!?*-`，与 sed 替换、YAML 双引号、env 单引号三种落地语境兼容）；secret_manager.sh 新增 `set`（b64 传参+白名单校验）并抽出 apply_secret_files（secret.key/config.yaml/订阅模板/env 四处同步，行缺失自动补写）；改密钥后自动 `mihomo reload`（SIGHUP 热加载，实测新密钥 200/旧密钥 401）。
+5. **加固**：subscription_env_writer 与 secret_manager 解码 b64 前剥离全部空白（CLI base64(1) 76 列折行兼容）。
+
+**防回归**：新增 `tests/test_webgui_pages.sh`（每菜单页必须有同名页面控制器 + 禁止 configdRun 数组第二参 + 动作 command 行禁止 %s + 密钥 API 闭环）；test_secret_manager.sh 扩到 5 组（b64 设置/三处同步/拒绝矩阵/env 行补写）。**套件 13/13 PASS**。
+
+**VM 实测全过**：订阅 set API 返回 ok（URL 掩码不变、同值回写 diff 零变化、http URL 正确拒绝）；四页 200；secret reveal/set/regenerate 全通；9090 面板 Bearer 认证 200；cron.d 6h 订阅 + 1min watchdog 在位；secret.key == config.yaml == template == env 四处一致（原密钥 d046… 保留，可在界面查看）。
+
+**最终包 `output/os-mihomo-1.0.6.pkg` SHA256=a5e994f5ddc05d5c872bf4cd934199e1203968e5e708d8d811fd2bc168d38682**（旧包移入 output/archive/）。

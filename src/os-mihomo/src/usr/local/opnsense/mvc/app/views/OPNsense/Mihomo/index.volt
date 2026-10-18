@@ -42,6 +42,45 @@
 
 <div class="content-box" style="padding-bottom: 1.5em;">
     <div class="col-xs-12">
+        <h2>{{ lang._('Mihomo - Dashboard API Secret (9090)') }}</h2>
+        <p class="text-muted">{{ lang._('Secret for the bundled dashboard (http://router-ip:9090/ui/) and the external controller API.') }}</p>
+        <hr/>
+    </div>
+
+    <div class="col-xs-12">
+        <div class="form-group">
+            <label>{{ lang._('Current Secret (masked)') }}</label>
+            <div>
+                <code id="api_secret_masked" style="font-size: 13px;">{{ lang._('Loading...') }}</code>
+            </div>
+            <span class="help-block">{{ lang._('Use this secret to sign in to the dashboard at port 9090. Changes are applied to config.yaml, the subscription template and the sub env, then mihomo is hot-reloaded.') }}</span>
+        </div>
+        <button class="btn btn-default" id="btn_secret_reveal" type="button">
+            <i class="fa fa-eye"></i> {{ lang._('Show Secret') }}
+        </button>
+        <button class="btn btn-warning" id="btn_secret_generate" type="button" style="margin-left: 8px;">
+            <i class="fa fa-refresh"></i> {{ lang._('Generate New Secret') }}
+        </button>
+    </div>
+
+    <div class="col-xs-12" style="margin-top: 15px;">
+        <div class="form-group">
+            <label for="api_secret_custom">{{ lang._('Set Custom Secret') }}</label>
+            <div class="input-group" style="max-width: 480px;">
+                <input type="text" class="form-control" id="api_secret_custom" autocomplete="off" spellcheck="false"/>
+                <span class="input-group-btn">
+                    <button class="btn btn-primary" id="btn_secret_apply" type="button">
+                        <b>{{ lang._('Apply') }}</b> <i id="btn_secret_apply_progress"></i>
+                    </button>
+                </span>
+            </div>
+            <span class="help-block">{{ lang._('4-128 characters; only letters, digits and . _ ~ @ # % ^ + = : ; , ! ? * - are allowed.') }}</span>
+        </div>
+    </div>
+</div>
+
+<div class="content-box" style="padding-bottom: 1.5em;">
+    <div class="col-xs-12">
         <h2>{{ lang._('Mihomo - Subscription') }}</h2>
         <p class="text-muted">{{ lang._('Manage the private subscription source, the automatic update interval and inspect the last update result.') }}</p>
         <hr/>
@@ -135,6 +174,34 @@ $(function () {
                 $badge.removeClass('label-default label-danger').addClass('label-success').html('<i class="fa fa-check-circle"></i> ' + '{{ lang._("Running") }}');
             } else {
                 $badge.removeClass('label-default label-success').addClass('label-danger').html('<i class="fa fa-times-circle"></i> ' + '{{ lang._("Stopped") }}');
+            }
+        });
+    }
+
+    function loadSecretMasked() {
+        ajaxGet('/api/mihomo/general/getGeneral', {}, function (data) {
+            var masked = '';
+            if (data && data.mihomo && data.mihomo.general) {
+                masked = data.mihomo.general.secret_masked || '';
+            } else if (data && data.general) {
+                masked = data.general.secret_masked || '';
+            }
+            $('#api_secret_masked').text(masked || 'NOT_CONFIGURED');
+        });
+    }
+
+    function showSecretDialog(title, secret) {
+        var $input = $('<input type="text" class="form-control" readonly style="font-family: Menlo, Monaco, Consolas, monospace;"/>').val(secret);
+        var $wrap = $('<div></div>');
+        $('<p></p>').text('{{ lang._("Copy this secret to sign in to the dashboard at port 9090:") }}').appendTo($wrap);
+        $input.appendTo($wrap);
+        BootstrapDialog.show({
+            type: BootstrapDialog.TYPE_INFO,
+            title: title,
+            message: $wrap,
+            onshown: function (dialog) {
+                $input.on('focus click', function () { this.select(); });
+                $input.focus();
             }
         });
     }
@@ -402,7 +469,92 @@ $(function () {
         });
     });
 
+    $('#btn_secret_reveal').click(function () {
+        ajaxGet('/api/mihomo/general/secretReveal', {}, function (data) {
+            if (data && data.status === 'ok') {
+                showSecretDialog('{{ lang._("Dashboard API Secret") }}', data.secret);
+            } else {
+                BootstrapDialog.show({
+                    type: BootstrapDialog.TYPE_DANGER,
+                    title: '{{ lang._("Error") }}',
+                    message: textBlock(data && data.message ? data.message : '{{ lang._("Failed to read the API secret.") }}')
+                });
+            }
+        });
+    });
+
+    $('#btn_secret_generate').click(function () {
+        BootstrapDialog.confirm(
+            '{{ lang._("Generate a new secret and hot-reload mihomo? The old secret stops working immediately.") }}',
+            function (confirmed) {
+                if (!confirmed) {
+                    return;
+                }
+                ajaxCall('/api/mihomo/general/regenerateSecret', {}, function (data) {
+                    if (data && data.status === 'ok') {
+                        if (typeof data.secret_masked === 'string' && data.secret_masked.length > 0) {
+                            $('#api_secret_masked').text(data.secret_masked);
+                        }
+                        showSecretDialog('{{ lang._("New API Secret") }}', data.secret || '');
+                    } else {
+                        BootstrapDialog.show({
+                            type: BootstrapDialog.TYPE_DANGER,
+                            title: '{{ lang._("Error") }}',
+                            message: textBlock(data && data.message ? data.message : '{{ lang._("Failed to generate a new secret.") }}')
+                        });
+                    }
+                });
+            }
+        );
+    });
+
+    $('#btn_secret_apply').click(function () {
+        var secret = $('#api_secret_custom').val();
+        if (secret.length < 4 || secret.length > 128) {
+            BootstrapDialog.show({
+                type: BootstrapDialog.TYPE_WARNING,
+                title: '{{ lang._("Error") }}',
+                message: textBlock('{{ lang._("The secret must be 4-128 characters long.") }}')
+            });
+            return;
+        }
+        if (!/^[A-Za-z0-9._~@#%^+=:;,!?*-]+$/.test(secret)) {
+            BootstrapDialog.show({
+                type: BootstrapDialog.TYPE_WARNING,
+                title: '{{ lang._("Error") }}',
+                message: textBlock('{{ lang._("Only letters, digits and . _ ~ @ # % ^ + = : ; , ! ? * - are allowed.") }}')
+            });
+            return;
+        }
+        var $progress = $('#btn_secret_apply_progress');
+        var $button = $('#btn_secret_apply');
+        $progress.addClass('fa fa-spinner fa-pulse');
+        $button.prop('disabled', true);
+        ajaxCall('/api/mihomo/general/secretSet', { secret: secret }, function (data) {
+            $progress.removeClass('fa fa-spinner fa-pulse');
+            $button.prop('disabled', false);
+            if (data && data.status === 'ok') {
+                $('#api_secret_custom').val('');
+                if (typeof data.secret_masked === 'string' && data.secret_masked.length > 0) {
+                    $('#api_secret_masked').text(data.secret_masked);
+                }
+                BootstrapDialog.show({
+                    type: BootstrapDialog.TYPE_SUCCESS,
+                    title: '{{ lang._("Saved") }}',
+                    message: textBlock(data.message || '{{ lang._("API secret updated.") }}')
+                });
+            } else {
+                BootstrapDialog.show({
+                    type: BootstrapDialog.TYPE_DANGER,
+                    title: '{{ lang._("Error") }}',
+                    message: textBlock(data && data.message ? data.message : '{{ lang._("Failed to update the API secret.") }}')
+                });
+            }
+        });
+    });
+
     loadSubscription(true);
+    loadSecretMasked();
     setInterval(updateStatus, 5000);
 });
 </script>

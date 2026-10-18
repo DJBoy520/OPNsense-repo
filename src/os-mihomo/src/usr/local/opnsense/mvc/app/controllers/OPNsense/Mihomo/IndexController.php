@@ -28,6 +28,12 @@
 
 namespace OPNsense\Mihomo;
 
+/**
+ * General 页：/ui/mihomo/
+ * Rules/Status/Logs 是独立页面控制器（RulesController 等）——
+ * /ui/{module}/{controller} 路由按控制器文件名解析，IndexController
+ * 上的多余 action 永远路由不到。
+ */
 class IndexController extends \OPNsense\Base\IndexController
 {
     public function indexAction()
@@ -36,21 +42,5 @@ class IndexController extends \OPNsense\Base\IndexController
         $this->view->subscriptionForm = $this->getForm('subscription');
         $this->view->rulesForm = $this->getForm('rules');
         $this->view->pick('OPNsense/Mihomo/index');
-    }
-
-    public function rulesAction()
-    {
-        $this->view->rulesForm = $this->getForm('rules');
-        $this->view->pick('OPNsense/Mihomo/rules');
-    }
-
-    public function statusAction()
-    {
-        $this->view->pick('OPNsense/Mihomo/status');
-    }
-
-    public function logsAction()
-    {
-        $this->view->pick('OPNsense/Mihomo/logs');
     }
 }

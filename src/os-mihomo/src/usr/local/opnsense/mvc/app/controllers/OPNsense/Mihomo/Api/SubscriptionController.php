@@ -135,10 +135,13 @@ class SubscriptionController extends ApiControllerBase
         }
 
         // env 由 PHP 写入器做第二份强校验与 POSIX 单引号转义；
-        // URL 以 b64: 前缀传——configd 对 %s 参数做 shell 展开，'&' 会截断命令
+        // URL 以 b64: 前缀传——configd 对 %s 参数做 shell 展开，'&' 会截断命令。
+        // 26.7 的 configdRun($event, $detach, ...) 第二参是 detach：带参数必须走
+        // configdpRun($event, $params[])，否则数组落进 detach 位变异步 execute，
+        // 返回 job UUID 而非脚本输出（订阅保存报“写入 sub/env 失败”的根因）。
         if ($url !== '') {
             $backend = new Backend();
-            $output = (string)$backend->configdRun(
+            $output = (string)$backend->configdpRun(
                 'mihomo sub-env-write',
                 ['b64:' . base64_encode($url), $autoUpdate ? '1' : '0', $interval]
             );
@@ -180,9 +183,9 @@ class SubscriptionController extends ApiControllerBase
             return ['status' => 'busy', 'message' => '订阅更新正在进行中，请稍候'];
         }
 
-        // sub.sh 最坏约 10 分钟；detach 后请求立即返回，这里仍放宽脚本时限
-        set_time_limit(300);
-        (new Backend())->configdRun('mihomo sub-update', [], true);
+        // sub.sh 最坏约 10 分钟；detach=true（26.7 签名第二参）走异步 execute，
+        // configd 立即返回 job UUID，结果由前端轮询状态文件获取
+        (new Backend())->configdRun('mihomo sub-update', true);
 
         return ['status' => 'triggered', 'message' => '订阅更新已触发'];
     }
@@ -264,7 +267,7 @@ class SubscriptionController extends ApiControllerBase
     private function syncCronJob($autoUpdate, $interval)
     {
         $backend = new Backend();
-        $output = (string)$backend->configdRun(
+        $output = (string)$backend->configdpRun(
             'mihomo setup-cron',
             [$autoUpdate ? '1' : '0', $interval]
         );
