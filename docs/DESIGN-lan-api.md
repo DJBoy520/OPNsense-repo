@@ -1,8 +1,8 @@
-# DESIGN: 9090 External-Controller LAN 放开（lan_api 字段转正）— v2
+# DESIGN: 9090 External-Controller LAN 放开（lan_api 字段转正）— v2.1
 
-状态：v2（按双模型审计修订：Gemini APPROVE-WITH-FIXES 8 条 / DeepSeek BLOCK 26 条，独立复核确认 12 条，含 2 条 HIGH——均已在本文吸收；22 条超复核上限的发现择要吸收）
+状态：v2.1（v2 + SIGHUP 实测裁决；待快速复审后实施）
 日期：2026-10-18
-v1 → v2 变化：PF 改为"显式 renderer+loader+fail-closed"；补全启动/升级/watchdog 生命周期；开关时序与回滚定义；CIDR 强校验；幂等 reconcile；绑定地址决策（保留 0.0.0.0 + 论证）；SIGHUP 争议改为"实测裁决 + sockstat 断言"。
+v2 → v2.1：**实施 Step 0 已完成**——VM 实测（mihomo v1.19.30，pid 不变）：`external-controller` 绑定行 sed 后 SIGHUP，监听地址即时切换（`tcp46 *:9090` → `tcp4 127.0.0.1:9090` → `tcp46 *:9090`）。裁决：**SIGHUP 会重建 API listener（DeepSeek 读源码结论正确，Gemini 错误）**；api_bind_manager 直接用 reload，删除 restart 回退分支。**附带实测发现：0.0.0.0 绑定实际是 tcp46 双栈监听（IPv6 同样在听）**——PF 规则因此**不加 inet 限定**（v4/v6 都要管住），撤销 v2 吸收的"规则加 inet"条目。
 关联：目标版本 1.0.8。
 
 ## 1. 背景与目标（不变）
@@ -19,7 +19,7 @@ v1 → v2 变化：PF 改为"显式 renderer+loader+fail-closed"；补全启动/
 4. **[审计修正]** filter reload 会清空 anchor 内容（非空 named anchor 在同一规则集中保留与否不可依赖），装载必须独立于 filter reload 的幂等动作。
 5. transport anchor policy 红线（禁 block）只约束 mihomo-transport；mihomo-api 是独立 anchor，其唯一 block 精确到 `(self):9090`，renderer 静态断言规则形状（见 §5）。
 6. mihomo external-controller 无 IP 白名单（v1.19.30）；CORS 不是访问控制。
-7. **[审计修正]** SIGHUP 是否重建 API listener：两位审计员结论相反（Gemini：单次 bind；DeepSeek 读源码 main.go:247-250 → hub.Parse → route.ReCreateServer：会重建）。**实现第一步用 sockstat 实测裁决**，运行期不依赖假设（§6 校验）。
+7. **[实测裁决]** SIGHUP 会重建 API listener（含绑定地址）：VM 实测两次往返切换均即时生效（见文首 v2.1 说明），api_bind_manager 直接用 reload；运行期仍保留 sockstat 断言防未来版本行为漂移。
 8. `transport_render.php` 已有 lan-net / lan-ip 推导与 canonical_cidr（filter_var + ip2long），直接复用。
 9. panel-state.env 既有通道（GeneralController 写、sub_lib/service_manager 读）。
 
@@ -45,12 +45,13 @@ v1 → v2 变化：PF 改为"显式 renderer+loader+fail-closed"；补全启动/
 2. 校验 config.yaml 与 template_config.yaml 存在（缺失则明确报错跳过该文件，**绝不创建只有绑定行的残缺 YAML**）。
 3. **PF 先行**：渲染 `/var/db/os-mihomo/pf-api.active.conf`（lan=1 时含下述规则，lan=0 时为空文件），`pfctl -a mihomo-api -f <file>`，随后 `pfctl -a mihomo-api -sr` 断言规则数与期望一致（lan=1 必须 >0）。
    ```
-   table <mihomo_api_clients> const { 127.0.0.1 __MIHOMO_API_CIDR__ }
+   table <mihomo_api_clients> const { 127.0.0.1 ::1 __MIHOMO_API_CIDR__ }
    pass in quick on lo0 proto tcp to 127.0.0.1 port 9090 keep state
    pass in quick on __MIHOMO_LAN_IF__ proto tcp from <mihomo_api_clients> to (__MIHOMO_LAN_IF__) port 9090 keep state
    block in quick proto tcp to (__MIHOMO_LAN_IF__) port 9090
    ```
    - **接口限定**（审计修正）：pass 限定 lo0 与 LAN 接口、目标限定接口自身 IP；block 限定目标为 LAN 口自身地址 9090——WAN 上伪造源 IP 的包不匹配任何 pass、命中 block；不触碰转发流量（无转发语义，仅 to 本机地址）。
+   - **[实测修正] 规则不加 inet**：0.0.0.0 绑定实测为 tcp46 双栈监听（IPv6 同样在听），规则必须同时覆盖 v4/v6；table 含 ::1（本机 v6 回环放行），v6 其他源命中 block——fail-closed。
    - **block 范围有意的 policy 例外**：本 anchor 会在 head 覆盖管理员对 (LAN-IP):9090 的自定义放行——这是插件对自身管理面的保护语义，renderer 静态断言全文只允许上述形状（pass 在前、唯一 block 精确匹配），防止未来把 block 扩大；README 红线表述同步更新。
    - **PF states**：CIDR 收窄或关闭时 `pfctl -a mihomo-api -F states`，防长寿 WebSocket 绕过新策略。
 4. **绑定行渲染**：sed config.yaml 与 template 的 `^external-controller:` 行（lan=1 → `0.0.0.0:9090`；lan=0 → `127.0.0.1:9090`），写后 `grep -qF` 校验；行缺失先补末行换行再追加；目标文件缺失跳过并报错。
@@ -110,12 +111,12 @@ mihomo-api anchor 内容**不会**经 registerAnchor/filter reload 持久化，�
 - fail-closed 双保险：绑定持久化（config.yaml）+ PF 空窗由"启动前装载 + 失败回绑 127.0.0.1 + watchdog 兜底"三层封堵；仍保留的最坏窗口 ≤ 单次启动时长，且方向是**收回**而非放开。
 - secret 前置 + 64-hex + 面板轮换；Bearer 明文经 HTTP 属 LAN 信任边界内的已知接受风险（文档明示；如需更高保障另评估 external-controller-tls）。
 - `/ui/` 静态页随 listener 对 CIDR 内可达（无需 secret）——如实写入验收与面板文案。
-- IPv4-only：anchor 规则加 `inet` 限定，明示 v6 管理面走 SSH 隧道。
+- 双栈事实：0.0.0.0 绑定实测为 tcp46（v4+v6 都在听），anchor 规则不加 inet、同时覆盖两栈；v6 管理面默认被 block（fail-closed），如需 v6 访问走 SSH 隧道。
 - 不动 mihomo-transport anchor、不碰主规则集、不改 sub_lib 合成算法（external-controller 仍走模板直通）。
 
 ## 6. 实施第一步与验收清单（修订）
 
-**Step 0（先于一切编码）**：VM 上实测 SIGHUP——改绑定行 → SIGHUP → sockstat 断言监听地址。结论写入本文档；据此固化 api_bind_manager 的 reload/restart 分支（两审计员对此结论相反，实测为准）。
+**Step 0（已完成）**：VM 实测 SIGHUP——**会重建 listener 并切换绑定地址**（v2.1 文首记录），api_bind_manager 固化为 reload 分支 + sockstat 断言，无 restart 回退。
 
 验收（在 v1 清单上增补）：
 1. 开启：filter reload → anchor 规则数>0 → 绑定 0.0.0.0 → SIGHUP → sockstat 断言 → 网段内 curl 带 secret 200 / 不带 401。
