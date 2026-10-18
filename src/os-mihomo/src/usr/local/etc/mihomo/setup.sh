@@ -63,19 +63,33 @@ case "$INTERVAL" in
         ;;
 esac
 
+# configd 就绪等待：装包即部署场景下 configd 可能刚被 +POST_INSTALL 重启
+_i=0
+while [ "$_i" -lt 10 ]; do
+    if "$CONFIGCTL" mihomo version >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+    _i=$((_i + 1))
+done
+
 echo "    运行环境就绪 [传输模式: $TRANSPORT, 更新周期: $INTERVAL]"
 
 # 步骤 1: env 写入
+# configd 对 %s 参数做 shell 展开，URL 里的 & 会截断命令——直接调 PHP 写入器
+# 并以 b64: 前缀传 URL（openssl base64 -A 输出单行）
 echo "--> 步骤 1/5: 正在写入订阅环境变量..."
 if [ -n "$URL" ]; then
-    _env_tmp="$(mktemp /tmp/sub-env.XXXXXX 2>/dev/null || echo /tmp/sub-env.$$.log)"
-    $CONFIGCTL mihomo sub-env-write "$URL" "$AUTO" "$INTERVAL" > "$_env_tmp" 2>&1 || true
-    if grep -q "OK" "$_env_tmp"; then
-        echo "    订阅环境变量写入成功"
+    _b64_url="$(printf '%s' "$URL" | openssl base64 -A 2>/dev/null || true)"
+    if [ -z "$_b64_url" ]; then
+        echo "警告：URL base64 编码失败（openssl 不可用？），跳过 env 写入" >&2
     else
-        echo "警告：写入订阅环境变量失败: $(cat "$_env_tmp" 2>/dev/null)" >&2
+        if "$PHP_BIN" /usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php "b64:$_b64_url" "$AUTO" "$INTERVAL" >/dev/null 2>&1; then
+            echo "    订阅环境变量写入成功"
+        else
+            echo "警告：写入订阅环境变量失败（URL 校验未通过或文件不可写）" >&2
+        fi
     fi
-    rm -f "$_env_tmp"
 else
     echo "    提示：订阅 URL 为空，沿用既有订阅配置"
 fi
@@ -93,17 +107,18 @@ rm -f "$_setup_tmp"
 echo "    模型与定时任务配置成功"
 
 # 步骤 3: 传输层分发
+# 注意：configctl 的动作与参数必须分开传（'filter reload' 带引号会被当成单个动作名）
 echo "--> 步骤 3/5: 正在配置并装载传输层规则..."
 if [ "$TRANSPORT" = "transparent" ]; then
     echo "    正在执行 filter reload 以注册 anchor 引用..."
-    $CONFIGCTL 'filter reload' >/dev/null 2>&1 || true
+    "$CONFIGCTL" filter reload >/dev/null 2>&1 || true
     echo "    正在启用透明代理传输层 (transport-enable)..."
-    $CONFIGCTL mihomo transport-enable >/dev/null 2>&1 || true
+    "$CONFIGCTL" mihomo transport-enable >/dev/null 2>&1 || true
 else
     echo "    正在禁用透明代理传输层 (transport-disable)..."
-    $CONFIGCTL mihomo transport-disable >/dev/null 2>&1 || true
+    "$CONFIGCTL" mihomo transport-disable >/dev/null 2>&1 || true
     echo "    正在重载防火墙规则集 (filter reload)..."
-    $CONFIGCTL 'filter reload' >/dev/null 2>&1 || true
+    "$CONFIGCTL" filter reload >/dev/null 2>&1 || true
 fi
 
 # 步骤 4: 订阅拉取

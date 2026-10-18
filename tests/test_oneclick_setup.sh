@@ -51,14 +51,16 @@ echo "  [PASS] header documents pkg-add and manual usages"
 
 # (b) 流程顺序：env 写入 -> 模型/Cron -> filter reload -> transport 分发 -> sub-update
 echo "--> Test 2: setup.sh executes steps in the mandated order..."
-_line_env="$(first_exec_line "$SETUP_SH" 'sub-env-write|ENV_WRITER')"
+_line_env="$(first_exec_line "$SETUP_SH" 'subscription_env_writer')"
+_line_b64="$(first_exec_line "$SETUP_SH" 'b64:')"
 _line_setup="$(first_exec_line "$SETUP_SH" '/usr/local/bin/php.*(SETUP_PHP|mihomo_setup[.]php)|PHP_BIN.*(SETUP_PHP|mihomo_setup[.]php)|(^|[^A-Za-z_])PHP[[:space:]].*(SETUP_PHP|mihomo_setup[.]php)')"
 _line_reload="$(first_exec_line "$SETUP_SH" 'filter.*reload')"
 _line_enable="$(first_exec_line "$SETUP_SH" 'transport-enable|TRANSPORT_ENABLE|transport_manager[.]sh.*enable|TRANSPORT_MGR.*enable')"
 _line_disable="$(first_exec_line "$SETUP_SH" 'transport-disable|TRANSPORT_DISABLE|transport_manager[.]sh.*disable|TRANSPORT_MGR.*disable')"
 _line_subupdate="$(first_exec_line "$SETUP_SH" 'sub-update|SUB_UPDATE')"
 
-[ -n "$_line_env" ] || fail "setup.sh 未找到 sub-env-write 调用"
+[ -n "$_line_env" ] || fail "setup.sh 未找到 subscription_env_writer 直调（configd 参数走 shell 展开，& 会截断命令，必须直调 PHP）"
+[ -n "$_line_b64" ] || fail "setup.sh 必须以 b64: 前缀传 URL"
 [ -n "$_line_setup" ] || fail "setup.sh 未找到 mihomo_setup.php 调用"
 [ -n "$_line_reload" ] || fail "setup.sh 未找到 filter reload 调用"
 [ -n "$_line_enable" ] || fail "setup.sh 未找到 transport-enable 调用"
@@ -67,7 +69,7 @@ _line_subupdate="$(first_exec_line "$SETUP_SH" 'sub-update|SUB_UPDATE')"
 
 [ "$_line_env" -lt "$_line_setup" ] || \
     fail "流程顺序错误：sub-env-write(line $_line_env) 必须早于 mihomo_setup.php(line $_line_setup)"
-echo "  [PASS] sub-env-write before mihomo_setup.php"
+echo "  [PASS] env writer (b64:) before mihomo_setup.php"
 
 [ "$_line_setup" -lt "$_line_reload" ] || \
     fail "流程顺序错误：mihomo_setup.php(line $_line_setup) 必须早于 filter reload(line $_line_reload)"

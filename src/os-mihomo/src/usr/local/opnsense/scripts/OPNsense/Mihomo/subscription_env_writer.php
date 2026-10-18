@@ -4,7 +4,8 @@
  * subscription_env_writer.php - F1 订阅 env 写入（服务端强校验的第二道防线）
  *
  * 用法：
- *   php subscription_env_writer.php <url> <auto_update:0|1> <interval:o6h|o12h|o24h>
+ *   php subscription_env_writer.php <url|b64:<base64-url>> <auto_update:0|1> <interval:o6h|o12h|o24h>
+ *   URL 含 & 等 shell 元字符时必须用 b64: 前缀（configd 参数经 shell 展开）
  *
  * 设计：docs/DESIGN-panel-features-v2.md D1
  *   - env 文件默认 /usr/local/etc/mihomo/sub/env，可用 MIHOMO_ENV_FILE 覆盖。
@@ -82,6 +83,16 @@ if (count($args) !== 3) {
 }
 
 list($url, $autoUpdate, $interval) = $args;
+
+/* configd 对 %s 参数做 shell 展开，'&' 等元字符会截断命令——
+ * 调用方（控制器/setup.sh）必须以 'b64:' 前缀 + base64 传 URL */
+if (strncmp($url, 'b64:', 4) === 0) {
+    $decoded = base64_decode(substr($url, 4), true);
+    if ($decoded === false || $decoded === '') {
+        fail('b64: 前缀的订阅地址 base64 解码失败');
+    }
+    $url = $decoded;
+}
 
 if (!is_safe_subscription_url($url)) {
     fail('订阅 URL 未通过安全校验：必须为 https，且不得包含引号、反引号、控制字符或 "$("');

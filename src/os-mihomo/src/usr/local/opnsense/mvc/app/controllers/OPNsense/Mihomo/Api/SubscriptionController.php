@@ -31,15 +31,14 @@ namespace OPNsense\Mihomo\Api;
 use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
-use OPNsense\Cron\Cron;
 use OPNsense\Mihomo\Mihomo;
 
 /**
  * 订阅管理 API（F1）
  *
  * 订阅 URL 的唯一真源是 MVC 模型；/usr/local/etc/mihomo/sub/env 由 configd 动作
- * mihomo sub-env-write 生成。自动更新任务通过 OPNsense 核心 Cron 模型写入
- * //OPNsense/cron（设计允许的唯一方式），不直接编辑 config.xml。
+ * mihomo sub-env-write 生成。自动更新调度写 /etc/cron.d/os-mihomo（经 configd
+ * 动作 setup-cron，见设计文档实施修订记录），不直接编辑 config.xml。
  */
 class SubscriptionController extends ApiControllerBase
 {
@@ -135,12 +134,13 @@ class SubscriptionController extends ApiControllerBase
             return ['status' => 'failed', 'message' => '保存订阅设置失败: ' . $e->getMessage()];
         }
 
-        // env 由 PHP 写入器做第二份强校验与 POSIX 单引号转义
+        // env 由 PHP 写入器做第二份强校验与 POSIX 单引号转义；
+        // URL 以 b64: 前缀传——configd 对 %s 参数做 shell 展开，'&' 会截断命令
         if ($url !== '') {
             $backend = new Backend();
             $output = (string)$backend->configdRun(
                 'mihomo sub-env-write',
-                [$url, $autoUpdate ? '1' : '0', $interval]
+                ['b64:' . base64_encode($url), $autoUpdate ? '1' : '0', $interval]
             );
             if (stripos($output, 'OK') === false) {
                 return [
@@ -256,56 +256,20 @@ class SubscriptionController extends ApiControllerBase
     }
 
     /**
-     * 幂等同步自动更新任务
-     * auto_update=1：不存在则新建，存在则统一字段；
-     * auto_update=0：显式偏差——仅禁用不删除，保留任务历史与 uuid。
+     * 幂等同步自动更新调度
+     * 调度唯一真源是 /etc/cron.d/os-mihomo（Cron 模型在 26.7 无可编程物化路径，
+     * 见设计文档实施修订记录）；经 configd 动作 setup-cron 重写（参数为枚举值，
+     * 无 shell 元字符风险）。watchdog 行由该动作常驻维护。
      */
     private function syncCronJob($autoUpdate, $interval)
     {
-        /* o24h 不能写 '*/24'：Cron 模型 hours 掩码仅允许 0-23，serializeToConfig 会抛
-         * ValidationException；每日步长与 0 点等价，故映射为 '0' */
-        $hoursMap = ['o6h' => '*/6', 'o12h' => '*/12', 'o24h' => '0'];
-        $hours = isset($hoursMap[$interval]) ? $hoursMap[$interval] : '0';
-
-        // OPNsense 核心模型类为 OPNsense\Cron\Cron（config.xml 挂载点 //OPNsense/cron）
-        $cron = new Cron();
-        $existing = [];
-        foreach ($cron->jobs->job->iterateItems() as $job) {
-            if ((string)$job->description === self::CRON_DESCRIPTION) {
-                $existing[] = $job;
-            }
-        }
-
-        $changed = false;
-        if ($autoUpdate) {
-            if (count($existing) === 0) {
-                $existing[] = $cron->jobs->job->add();
-            }
-            foreach ($existing as $job) {
-                $job->minutes = '0';
-                $job->hours = $hours;
-                $job->days = '*';
-                $job->months = '*';
-                $job->weekdays = '*';
-                $job->command = self::CRON_COMMAND;
-                $job->parameters = '';
-                $job->enabled = '1';
-                $job->description = self::CRON_DESCRIPTION;
-            }
-            $changed = true;
-        } elseif (count($existing) > 0) {
-            foreach ($existing as $job) {
-                $job->enabled = '0';
-            }
-            $changed = true;
-        }
-
-        if ($changed) {
-            $cron->serializeToConfig();
-            if (Config::getInstance()->save() === false) {
-                throw new \Exception('config.xml 写入失败（可能被锁定）');
-            }
-            (new Backend())->configdRun('cron regenerate');
+        $backend = new Backend();
+        $output = (string)$backend->configdRun(
+            'mihomo setup-cron',
+            [$autoUpdate ? '1' : '0', $interval]
+        );
+        if (strpos($output, '"result":"ok"') === false) {
+            throw new \Exception('调度重写失败: ' . $this->truncate($output));
         }
     }
 

@@ -39,7 +39,8 @@ class GeneralController extends ApiMutableModelControllerBase
 
     public function getGeneralAction()
     {
-        $result = $this->getNodes('general');
+        /* 26.7 基类没有 getNodes/setNodes：读走标准 getAction()（返回整个模型节点树） */
+        $result = $this->getAction();
         $backend = new Backend();
         $maskedSecret = trim((string)$backend->configdRun('mihomo secret-masked'));
         if (empty($maskedSecret)) {
@@ -69,7 +70,8 @@ class GeneralController extends ApiMutableModelControllerBase
         ];
 
         try {
-            $saveResult = $this->setNodes('general');
+            /* 26.7 基类标准保存：构造模型→校验→setActionHook→落盘 */
+            $saveResult = $this->setAction();
         } catch (\Exception $e) {
             return ['result' => 'failed', 'status' => 'failed', 'message' => '保存设置失败: ' . $e->getMessage()];
         }

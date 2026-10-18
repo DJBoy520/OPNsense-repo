@@ -59,8 +59,9 @@ mihomo_hev_start()
     #     直接销毁；UP/RUNNING 或带地址的说明有活进程占用（如生产旧 hev 栈），
     #     拒绝启动并提示迁移步骤，防止误把外部设备当作自己的就绪状态。
     if ifconfig "${tun_dev}" >/dev/null 2>&1; then
-        _zombie="$(ifconfig "${tun_dev}" | awk '/^[[:space:]]*inet[[:space:]]/{found=1} /UP,/{up=1} END{exit !(found || up)}')"
-        if [ "${_zombie}" -eq 0 ]; then
+        # awk 必须 print 判定值：$() 只捕获 stdout，退出码不会赋给变量
+        _zombie="$(ifconfig "${tun_dev}" | awk '/^[[:space:]]*inet[[:space:]]/{found=1} /UP,/{up=1} END{print (found || up) ? 1 : 0}')"
+        if [ "${_zombie}" = "0" ]; then
             echo "提示：发现残留的空 ${tun_dev} 僵尸设备，自动销毁后继续。"
             ifconfig "${tun_dev}" destroy 2>/dev/null || true
         else
