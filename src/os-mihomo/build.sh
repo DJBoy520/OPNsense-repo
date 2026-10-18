@@ -105,6 +105,8 @@ need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/Api/RulesC
 need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/forms/subscription.xml"
 need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/forms/rules.xml"
 need_file "src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/rules.volt"
+need_file "src/usr/local/etc/mihomo/setup.sh"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php"
 
 case "$ABI" in
     universal)
@@ -206,6 +208,8 @@ chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_ap
 chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php"
 chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php"
 chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+chmod 0755 "$STAGEDIR/usr/local/etc/mihomo/setup.sh"
+chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php"
 chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/mihomo/setup_unbound.php"
 chmod 0755 "$STAGEDIR/usr/local/opnsense/scripts/mihomo/setup_firewall.php"
 

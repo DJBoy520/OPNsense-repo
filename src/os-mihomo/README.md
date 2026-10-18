@@ -58,6 +58,20 @@ https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-freebsd-am
 - **Fail-Open 故障旁路**：watchdog 巡检进程/API/DNS/socks 监听，异常时切回直连。
 - **零系统侵入**：Unbound 永不触碰；`/conf/config.xml` 仅允许模型 API 写入 `//OPNsense/mihomo` 与 `//OPNsense/cron` 两个节点；PF 只允许自有 `mihomo-transport` anchor（只含 pass/route-to，禁止 block/reject），主规则集永不篡改。
 
+## 一键安装（透明代理）
+
+订阅 URL 是唯一必填项，其余全自动（订阅写入、模型/传输层切换、自动更新与 watchdog 定时任务注册、订阅拉取、终检报告）：
+
+```sh
+# 方式一：装包即部署（pkg 会把环境变量传给安装钩子）
+MIHOMO_SETUP_URL='https://your-subscription-url' pkg add os-mihomo-1.0.5.pkg
+
+# 方式二：装包后一条命令（也可随时重跑修改设置）
+sh /usr/local/etc/mihomo/setup.sh 'https://your-subscription-url' transparent
+```
+
+可选参数：`MIHOMO_SETUP_TRANSPORT`（transparent/proxy，默认 transparent）、`MIHOMO_SETUP_INTERVAL`（o6h/o12h/o24h，默认 o24h）。setup.sh 幂等，重复执行等价于修改设置并重挂；transport 切 transparent 会经 filter reload 注册 `mihomo-transport` anchor 并接管 hev（tun0），全程 bypass 表保护管理口/SSH/WebGUI。
+
 ## 注意事项
 
 1. 当前仅支持 x86_64 / amd64 平台。

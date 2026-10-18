@@ -36,6 +36,20 @@ The version is pinned in `mihomo-version.env`. Every download is verified agains
 - **Upgrade protection**: `+PRE_INSTALL` stops the transport and the process (SIGTERM grace, then SIGKILL) and snapshots config.yaml / sub/env / custom-rules.txt / secret.key / template_config.yaml to `/var/db/os-mihomo/pre-upgrade/` (0600). `+POST_INSTALL` restores them strictly (missing files fall back to bundled samples, the secret is only generated when absent, the transport layer is re-applied per model after the health gate). Upgrades and reinstalls no longer lose the subscription.
 - **LAN exposure (off by default)**: mixed-port 7890 stays bound to `127.0.0.1` by default. When explicitly enabled in the panel it binds `0.0.0.0` with mandatory authentication (password reuses the API secret) and `lan-allowed-ips` restricted to the LAN subnet; the health gate probes the LAN binding accordingly. An unauthenticated LAN-open proxy is not offered.
 
+## One-Command Install (Transparent Proxy)
+
+The subscription URL is the only required input; everything else (env write, model/transport switch, cron registration for auto-update and the watchdog, subscription pull, final health report) is automated:
+
+```sh
+# Option A: deploy during install (pkg passes environment to its scripts)
+MIHOMO_SETUP_URL='https://your-subscription-url' pkg add os-mihomo-1.0.5.pkg
+
+# Option B: one command after install (re-runnable to change settings)
+sh /usr/local/etc/mihomo/setup.sh 'https://your-subscription-url' transparent
+```
+
+Optional: `MIHOMO_SETUP_TRANSPORT` (transparent/proxy, default transparent) and `MIHOMO_SETUP_INTERVAL` (o6h/o12h/o24h, default o24h). setup.sh is idempotent; switching to transparent registers the `mihomo-transport` anchor via filter reload and takes over hev (tun0), with the bypass table protecting management/SSH/WebGUI at all times.
+
 ## Security Features
 
 - **Official supply chain**: MetaCubeX releases only (pinned v1.19.30 compatible), SHA256-verified on both the archive and the unpacked binary; the zashboard UI is pinned and bundled, with zero runtime downloads.

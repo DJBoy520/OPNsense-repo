@@ -91,6 +91,13 @@
 
 ## 实施修订记录（2026-10-18，主控审计定稿）
 
+0. **一键安装（用户 2026-10-18 追加需求）**：目标 = 拷包 + 一条命令完成透明代理部署，订阅 URL 是唯一必填项。实现三层：
+   - `+POST_INSTALL` 环境变量钩子：pkg 会把调用方环境传给安装脚本，`MIHOMO_SETUP_URL='https://…' pkg add os-mihomo-1.0.5.pkg` 即装即部署（`MIHOMO_SETUP_TRANSPORT`/`MIHOMO_SETUP_INTERVAL` 可选，默认 transparent/o24h）。
+   - `/usr/local/etc/mihomo/setup.sh`（随包）：独立入口，装包后可随时重跑改设置；编排 sub-env-write → mihomo_setup.php（模型+Cron）→ filter reload → transport-enable → 订阅拉取 → 终检报告。
+   - `mihomo_setup.php`（随包）：CLI 合法引导 = `require_once('script/load_phalcon.php')`（核心 include_path 自带），经 MVC 模型 API 写 `//OPNsense/mihomo`（订阅字段 + transport_mode）与 `//OPNsense/cron`（自动更新任务 + **watchdog 每分钟常驻任务**，fail-open 引擎从此有人兜底）——红线机制不破。
+   - DNS 无缝：生产 AdGuardHome 上游本就指向 127.0.0.1:1053，mihomo 接管同端口，迁移零 DNS 改动；LAN 客户端网关保持 .2 不变，零客户端配置。
+   - 已验证锚点：load_phalcon.php 为 OPNsense 核心 CLI 引导（ntpd_status.php 等核心脚本同款，192.168.30.159 实机核实）。
+
 1. **D2 bypass 改为表排除法**（替代 D2 原文「bypass 逐条 quick pass 规则」）：anchor 内的 route-to 规则写成 `to ! <mihomo_bypass>`（表内含本机地址、网关、RFC1918、组播 224/4、240/4、255.255.255.255、0.0.0.0/8），不匹配的包自然落回主规则集。原因：原方案 bypass pass 带 quick 会先于用户策略命中，把管理员自己的 block 规则短路掉（比如对特定 LAN 客户端的封锁）。Gemini 强制清单中的 bypass 目的地一个不少，只是实现更保守。
 2. **F1 cron 注册移到 MVC 控制器**（替代「sub-env-write 动作内用 Cron 模型 API」）：独立 CLI PHP 无法可靠引导 MVC 框架；SubscriptionController::setAction 保存模型后直接经 `\OPNsense\Cron\Model` 注册/禁用每日任务（description 固定 `os-mihomo auto sub-update`），保存后 `cron regenerate`。红线不受影响（cron 仍经模型 API）。另：auto_update=0 时置 enabled=0 而非删除任务项（可逆、避免依赖不确定的 del API）。
 3. **hev.yaml 采用生产实证 schema**：tun0 地址 10.0.0.2、`ipv4-gateway: 10.0.0.1`（route-to 目标保持 `(tun0 10.0.0.1)`）、mtu 1500；hev-socks5-tunnel 在 FreeBSD 需要伪终端，`mihomo_hev` rc 用 `daemon -p` 包 `script -q /dev/null` 启动，stop 严格按 pid（必要时按 pid 找子进程），禁全局 pkill（生产只读核实，2026-10-18）。

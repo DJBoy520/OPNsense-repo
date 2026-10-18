@@ -247,7 +247,8 @@ class SubscriptionController extends ApiControllerBase
      */
     private function maskUrl($url)
     {
-        $pattern = '#^([A-Za-z][A-Za-z0-9+.-]*://)(?:[^/?#@]*@)?([^/?#]+)#';
+        /* 分隔符必须用 ~：# 既做分隔符又出现在字符类 [^/?#] 中会让 preg_match 返回 false */
+        $pattern = '~^([A-Za-z][A-Za-z0-9+.-]*://)(?:[^/?#]*@)?([^/?#]+)~';
         if (preg_match($pattern, $url, $matches)) {
             return $matches[1] . $matches[2] . '/***';
         }
@@ -261,8 +262,10 @@ class SubscriptionController extends ApiControllerBase
      */
     private function syncCronJob($autoUpdate, $interval)
     {
-        $hoursMap = ['o6h' => '*/6', 'o12h' => '*/12', 'o24h' => '*/24'];
-        $hours = isset($hoursMap[$interval]) ? $hoursMap[$interval] : '*/24';
+        /* o24h 不能写 '*/24'：Cron 模型 hours 掩码仅允许 0-23，serializeToConfig 会抛
+         * ValidationException；每日步长与 0 点等价，故映射为 '0' */
+        $hoursMap = ['o6h' => '*/6', 'o12h' => '*/12', 'o24h' => '0'];
+        $hours = isset($hoursMap[$interval]) ? $hoursMap[$interval] : '0';
 
         // OPNsense 核心模型类为 OPNsense\Cron\Cron（config.xml 挂载点 //OPNsense/cron）
         $cron = new Cron();

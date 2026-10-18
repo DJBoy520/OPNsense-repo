@@ -150,6 +150,8 @@ for PKG_PATH in "${PKG_FILES[@]}"; do
         "usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php"
         "usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php"
         "usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+        "usr/local/etc/mihomo/setup.sh"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php"
     )
     for pfile in "${REQUIRED_PANEL_FILES[@]}"; do
         [ -f "$EXTRACT_DIR/$pfile" ] || die "Required panel file missing in package: $pfile (at $EXTRACT_DIR/$pfile)"

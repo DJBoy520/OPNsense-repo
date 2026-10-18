@@ -2,7 +2,7 @@
 
 # os-mihomo post-install (socks-core mode + upgrade protection)
 # 本模式不写 /conf/config.xml、不改 Unbound；PF 只允许 mihomo-transport anchor。
-# 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切 % 字符。
+# 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切百分号字符。
 # 严格顺序：① 快照恢复（缺失项用 sample 兜底） ② secret 仅在缺失时生成
 # ③ 健康门禁 ④ 按模型幂等重挂透明代理传输层。
 
@@ -96,3 +96,9 @@ if [ "$HEALTH_OK" -eq 1 ] && [ -x "$CONF_DIR/../opnsense/scripts/OPNsense/Mihomo
         /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh enable || echo "WARNING: transport enable failed; system stays in plain proxy mode (DIRECT LAN unaffected)." >&2
     fi
 fi
+
+# 一键安装钩子：pkg 会把调用方环境传给本脚本，带 MIHOMO_SETUP_URL 即装即部署
+if [ -n "${MIHOMO_SETUP_URL:-}" ]; then
+    sh /usr/local/etc/mihomo/setup.sh "${MIHOMO_SETUP_URL}" "${MIHOMO_SETUP_TRANSPORT:-transparent}" "${MIHOMO_SETUP_INTERVAL:-o24h}" || echo "WARNING: one-click setup failed; run: sh /usr/local/etc/mihomo/setup.sh <url>" >&2
+fi
+
