@@ -5,14 +5,11 @@ rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cac
 rm -f /usr/local/opnsense/service/conf/actions.d/actions_mihomo.conf
 service configd restart >/dev/null 2>&1 || true
 
-# 不直接删除用户配置（订阅 env、secret、config.yaml），整体搬移到 /root 下留档，
-# 需要彻底清理时由运维手动执行 rm -rf /root/os-mihomo-removed-*。
-# 后缀用 PID 而非 date +%Y…：manifest 内嵌脚本里 % 转义会被破坏（实测被吃成 mHS）。
+# 不直接删除用户配置（订阅 env、secret、config.yaml），同步搬移到 /root 下留档
+# （不再后台 sleep：重装竞态由 +PRE_INSTALL 快照天然兜底）。
+# 后缀用 PID 而非 date：manifest 内嵌脚本里一切 % 字符都会被破坏（实测被吃成 mHS）。
 echo "===> Moving mihomo config to /root (kept, not deleted)"
-(
-    sleep 3
-    if [ -d /usr/local/etc/mihomo ]; then
-        mv /usr/local/etc/mihomo "/root/os-mihomo-removed-$$"
-    fi
-    rm -f /root/os-mihomo-install-warning.log
-) >/dev/null 2>&1 &
+if [ -d /usr/local/etc/mihomo ]; then
+    mv /usr/local/etc/mihomo "/root/os-mihomo-removed-$$"
+fi
+rm -f /root/os-mihomo-install-warning.log

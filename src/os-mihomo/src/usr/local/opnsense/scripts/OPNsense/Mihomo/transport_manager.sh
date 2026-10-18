@@ -1,0 +1,331 @@
+#!/bin/sh
+set -eu
+
+# transport_manager.sh - 透明代理传输层管理栈
+# 用法：transport_manager.sh {enable|disable|status|recover}
+# 管理 mihomo-transport PF anchor 与 hev-socks5-tunnel (tun0) 状态
+
+ANCHOR="mihomo-transport"
+MODE_FILE="/var/db/os-mihomo/transport-mode"
+PF_TEMPLATE="/usr/local/etc/mihomo/pf-transport.conf"
+RENDER="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+ACTIVE="/var/db/os-mihomo/pf-transport.active.conf"
+HEV_RC="/usr/local/etc/rc.d/mihomo_hev"
+HEV_CONF="/usr/local/etc/mihomo/hev.yaml"
+HEV_SAMPLE="/usr/local/etc/mihomo/hev.yaml.sample"
+PHP="/usr/local/bin/php"
+
+TUN_DEV="${MIHOMO_TUN_DEV:-tun0}"
+HEV_PIDFILE="/var/run/mihomo_hev.pid"
+
+# 检查当前父进程 SSH 会话是否存活
+# PPID 为 1 (init/launchd) 或 0 时视为存活；否则 kill -0 探测
+ssh_alive() {
+    _ppid="${PPID:-1}"
+    if [ "${_ppid}" -le 1 ] 2>/dev/null; then
+        return 0
+    fi
+    kill -0 "${_ppid}" 2>/dev/null
+}
+
+# 检查 mihomo 关键服务健康状态（7891、1053、9090 监听）
+mihomo_healthy() {
+    _sockstat="$(sockstat -4 -l 2>/dev/null || true)"
+    [ -n "${_sockstat}" ] || return 1
+    printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):7891([[:space:]]|$)" || return 1
+    printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):1053([[:space:]]|$)" || return 1
+    printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):9090([[:space:]]|$)" || return 1
+    return 0
+}
+
+# 统计 anchor 规则数，失败时安全返回 0
+anchor_rule_count() {
+    _rules="$(pfctl -a "${ANCHOR}" -sr 2>/dev/null || true)"
+    if [ -z "${_rules}" ]; then
+        echo 0
+    else
+        # grep -c 在无匹配时输出 0 且退出码非 0：|| true 防 set -e，避免再补一个 0
+        _count="$(printf "%s\n" "${_rules}" | grep -c . || true)"
+        echo "${_count:-0}"
+    fi
+}
+
+# 检查 hev 守护进程是否存活
+hev_running() {
+    [ -f "${HEV_PIDFILE}" ] || return 1
+    _hpid="$(cat "${HEV_PIDFILE}" 2>/dev/null || true)"
+    [ -n "${_hpid}" ] || return 1
+    kill -0 "${_hpid}" 2>/dev/null
+}
+
+# 检查 tun 设备是否存在
+tun_ready() {
+    ifconfig "${TUN_DEV}" >/dev/null 2>&1
+}
+
+# 渲染并校验 PF 规则集
+render_rules() {
+    if [ ! -x "${PHP}" ] || [ ! -f "${RENDER}" ]; then
+        echo "错误：PHP 解释器 (${PHP}) 或渲染脚本 (${RENDER}) 不可用" >&2
+        return 1
+    fi
+
+    _tmp_active="${ACTIVE}.tmp.$$"
+    rm -f "${_tmp_active}"
+
+    if ! "${PHP}" "${RENDER}" rules > "${_tmp_active}" 2>/dev/null; then
+        echo "错误：规则渲染执行失败" >&2
+        rm -f "${_tmp_active}"
+        return 1
+    fi
+
+    # 校验：文件非空
+    if [ ! -s "${_tmp_active}" ]; then
+        echo "错误：渲染出的规则集为空" >&2
+        rm -f "${_tmp_active}"
+        return 1
+    fi
+
+    # 校验：必须包含 route-to 规则
+    if ! grep -q "route-to" "${_tmp_active}"; then
+        echo "错误：渲染出的规则集缺少 route-to 规则" >&2
+        rm -f "${_tmp_active}"
+        return 1
+    fi
+
+    # 校验：严禁包含以 block 或 reject 开头的行（防锁死管理员）
+    if grep -Eiq '^[[:space:]]*(block|reject)([[:space:]]|$)' "${_tmp_active}"; then
+        echo "错误：渲染出的规则集包含禁止的 block/reject 规则" >&2
+        rm -f "${_tmp_active}"
+        return 1
+    fi
+
+    chmod 600 "${_tmp_active}"
+    mv -f "${_tmp_active}" "${ACTIVE}"
+    return 0
+}
+
+# 写入模式标记文件（原子更新）
+set_mode() {
+    _mode="$1"
+    mkdir -p /var/db/os-mihomo 2>/dev/null || true
+    _tmp_mode="${MODE_FILE}.tmp.$$"
+    printf "%s\n" "${_mode}" > "${_tmp_mode}"
+    chmod 600 "${_tmp_mode}" 2>/dev/null || true
+    mv -f "${_tmp_mode}" "${MODE_FILE}"
+}
+
+# disable 流程（幂等，任何情况下都 exit 0）
+do_disable() {
+    # 1. 清空 anchor 规则集，绝不碰主规则集
+    # pfctl -a mihomo-transport
+    pfctl -a "${ANCHOR}" -F all 2>/dev/null || true
+
+    # 2. 停止 hev 守护进程
+    if [ -x "${HEV_RC}" ]; then
+        "${HEV_RC}" stop 2>/dev/null || true
+    fi
+
+    # 3. 清理已激活的规则文件
+    rm -f "${ACTIVE}"
+
+    # 4. 记录模式为 proxy
+    set_mode "proxy"
+
+    echo "透明代理传输层已禁用 (普通代理模式)"
+    exit 0
+}
+
+# flush 流程（幂等，任何情况下都 exit 0）
+# 与 disable 的唯一区别：不改写 MODE_FILE。模式文件表达的是面板/模型的意图，
+# service_manager 停机与 watchdog fail-open 用 flush 拆传输层后，
+# do_start / recover 仍能按 transparent 意图幂等重挂。
+do_flush() {
+    pfctl -a "${ANCHOR}" -F all 2>/dev/null || true
+    if [ -x "${HEV_RC}" ]; then
+        "${HEV_RC}" stop 2>/dev/null || true
+    fi
+    rm -f "${ACTIVE}"
+    echo "透明代理传输层已临时拆除 (模式意图保留)"
+    exit 0
+}
+
+# enable 流程（顺序严格执行）
+do_enable() {
+    # 步骤 1：记录模式意图为 transparent（原子写入）
+    set_mode "transparent"
+
+    # 步骤 2：幂等短路检查
+    _cur_rules="$(anchor_rule_count)"
+    if [ "${_cur_rules}" -gt 0 ] && hev_running && tun_ready; then
+        echo "透明代理传输层已处于启用状态"
+        exit 0
+    fi
+
+    # 步骤 3：mihomo 健康门禁（失败退出但不回滚 MODE_FILE，待 recover 修复）
+    if ! mihomo_healthy; then
+        echo "错误：mihomo 核心服务健康门禁未通过 (7891/1053/9090 监听未就绪)" >&2
+        exit 1
+    fi
+
+    # 步骤 4：初始化并启动 hev
+    if [ ! -f "${HEV_CONF}" ]; then
+        if [ -f "${HEV_SAMPLE}" ]; then
+            cp -f "${HEV_SAMPLE}" "${HEV_CONF}"
+            chmod 600 "${HEV_CONF}"
+        else
+            echo "错误：找不到 hev 配置文件模板 ${HEV_SAMPLE}" >&2
+            exit 1
+        fi
+    fi
+
+    kldload if_tun 2>/dev/null || true
+
+    if [ ! -x "${HEV_RC}" ]; then
+        echo "错误：找不到可执行的 ${HEV_RC}" >&2
+        exit 1
+    fi
+
+    if ! "${HEV_RC}" start; then
+        echo "错误：启动 hev 服务失败" >&2
+        exit 1
+    fi
+
+    # 步骤 5：轮询 tun 接口就绪，最长 10 秒
+    _wait=0
+    _tun_ok=0
+    while [ "${_wait}" -lt 10 ]; do
+        if tun_ready; then
+            _tun_ok=1
+            break
+        fi
+        sleep 1
+        _wait=$((_wait + 1))
+    done
+
+    if [ "${_tun_ok}" -ne 1 ]; then
+        echo "错误：等待虚拟网卡 ${TUN_DEV} 就绪超时" >&2
+        "${HEV_RC}" stop 2>/dev/null || true
+        exit 1
+    fi
+
+    # 步骤 6：渲染规则并检查 SSH 存活
+    if ! render_rules; then
+        echo "错误：生成 PF 传输层规则失败" >&2
+        "${HEV_RC}" stop 2>/dev/null || true
+        exit 1
+    fi
+
+    if ! ssh_alive; then
+        echo "警告：检测到 SSH 会话断开，立即执行回滚" >&2
+        do_disable
+        exit 1
+    fi
+
+    # 步骤 7：加载规则到 anchor 并验证加载结果
+    # pfctl -a mihomo-transport
+    if ! pfctl -a "${ANCHOR}" -f "${ACTIVE}"; then
+        echo "错误：加载 PF 规则到 anchor ${ANCHOR} 失败" >&2
+        do_disable
+        exit 1
+    fi
+
+    _loaded_rules="$(anchor_rule_count)"
+    if [ "${_loaded_rules}" -le 0 ]; then
+        echo "错误：anchor ${ANCHOR} 加载后规则集为空，立即回滚" >&2
+        do_disable
+        exit 1
+    fi
+
+    # 步骤 8：最终 SSH 存活断言
+    if ! ssh_alive; then
+        echo "警告：加载规则后 SSH 探测失败，安全回滚" >&2
+        do_disable
+        exit 1
+    fi
+
+    # 输出启用成功摘要
+    _lan_info=""
+    if [ -x "${PHP}" ] && [ -f "${RENDER}" ]; then
+        _lan_info="$("${PHP}" "${RENDER}" lan-net 2>/dev/null || true)"
+    fi
+    echo "透明代理传输层启用成功 [TUN: ${TUN_DEV}, 网段: ${_lan_info:-LAN}, 规则数: ${_loaded_rules}]"
+    exit 0
+}
+
+# recover 流程
+do_recover() {
+    # 1. 检查 MODE_FILE 是否为 transparent
+    _mode="unknown"
+    if [ -f "${MODE_FILE}" ]; then
+        _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo "unknown")"
+    fi
+
+    if [ "${_mode}" != "transparent" ]; then
+        exit 0
+    fi
+
+    # 2. 检查规则数
+    _cur_rules="$(anchor_rule_count)"
+    if [ "${_cur_rules}" -gt 0 ]; then
+        exit 0
+    fi
+
+    # 3. 若 mihomo 健康且 tun 就绪，静默触发 enable 补挂规则
+    if mihomo_healthy && tun_ready; then
+        do_enable >/dev/null 2>&1 || true
+    fi
+
+    exit 0
+}
+
+# status 流程
+do_status() {
+    _mode="unknown"
+    if [ -f "${MODE_FILE}" ]; then
+        _mode="$(cat "${MODE_FILE}" 2>/dev/null || echo "unknown")"
+    fi
+
+    _rule_cnt="$(anchor_rule_count)"
+
+    _hev_pid="-"
+    if [ -f "${HEV_PIDFILE}" ]; then
+        _hpid="$(cat "${HEV_PIDFILE}" 2>/dev/null || true)"
+        if [ -n "${_hpid}" ] && kill -0 "${_hpid}" 2>/dev/null; then
+            _hev_pid="${_hpid}"
+        fi
+    fi
+
+    _tun_status="down"
+    if tun_ready; then
+        _tun_status="up"
+    fi
+
+    printf "Mode: %s\n" "${_mode}"
+    printf "Anchor rules: %s\n" "${_rule_cnt}"
+    printf "HEV PID: %s\n" "${_hev_pid}"
+    printf "TUN (%s): %s\n" "${TUN_DEV}" "${_tun_status}"
+    exit 0
+}
+
+case "${1:-status}" in
+    enable)
+        do_enable
+        ;;
+    disable)
+        do_disable
+        ;;
+    flush)
+        do_flush
+        ;;
+    status)
+        do_status
+        ;;
+    recover)
+        do_recover
+        ;;
+    *)
+        echo "Usage: $0 {enable|disable|flush|status|recover}"
+        exit 1
+        ;;
+esac

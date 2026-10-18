@@ -27,6 +27,19 @@
             <pattern>api/mihomo/logs/*</pattern>
         </patterns>
     </page-services-mihomo-logs>
+    <page-services-mihomo-rules>
+        <name>Services: Mihomo: Rules</name>
+        <patterns>
+            <pattern>ui/mihomo/rules*</pattern>
+            <pattern>api/mihomo/rules/*</pattern>
+        </patterns>
+    </page-services-mihomo-rules>
+    <page-services-mihomo-subscription>
+        <name>Services: Mihomo: Subscription</name>
+        <patterns>
+            <pattern>api/mihomo/subscription/*</pattern>
+        </patterns>
+    </page-services-mihomo-subscription>
     <page-services-mihomo-service>
         <name>Services: Mihomo: Service</name>
         <patterns>

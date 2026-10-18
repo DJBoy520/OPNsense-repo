@@ -1,3 +1,4 @@
+mixed-port: 7890 #本机 HTTP+SOCKS 混合入口（默认仅绑 127.0.0.1；面板 LAN 暴露开启时绑定 0.0.0.0 并启用认证）
 socks-port: 7891
 log-level: info #在调试结果后，改为error，减少日志输出。
 allow-lan: false

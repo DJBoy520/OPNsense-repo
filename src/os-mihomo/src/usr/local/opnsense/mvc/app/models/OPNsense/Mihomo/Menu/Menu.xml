@@ -2,8 +2,9 @@
     <Services>
         <Mihomo VisibleName="Mihomo" cssClass="fa fa-globe fa-fw">
             <General VisibleName="General" order="10" url="/ui/mihomo/"/>
-            <Status VisibleName="Status" order="20" url="/ui/mihomo/status"/>
-            <Logs VisibleName="Logs" order="30" url="/ui/mihomo/logs"/>
+            <Rules VisibleName="Rules" order="20" url="/ui/mihomo/rules"/>
+            <Status VisibleName="Status" order="30" url="/ui/mihomo/status"/>
+            <Logs VisibleName="Logs" order="40" url="/ui/mihomo/logs"/>
         </Mihomo>
     </Services>
 </menu>

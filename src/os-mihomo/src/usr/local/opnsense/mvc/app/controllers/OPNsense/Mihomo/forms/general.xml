@@ -17,4 +17,22 @@
         <type>checkbox</type>
         <help>Allow dashboard and external controller access from LAN interfaces.</help>
     </field>
+    <field>
+        <id>mihomo.general.transport_mode</id>
+        <label>Transport Mode</label>
+        <type>dropdown</type>
+        <help>Proxy only keeps the socks listener local (127.0.0.1). Transparent proxy routes LAN traffic through the hev tunnel and the mihomo-transport PF anchor.</help>
+    </field>
+    <field>
+        <id>mihomo.general.lan_expose</id>
+        <label>Expose Proxy to LAN</label>
+        <type>checkbox</type>
+        <help>Disabled by default: the proxy listens on 127.0.0.1 only (socks 7890/7891) and LAN clients cannot use it. When enabled, the listener binds to the LAN side with secret-based authentication.</help>
+    </field>
+    <field>
+        <id>mihomo.general.lan_user</id>
+        <label>LAN Proxy Username</label>
+        <type>text</type>
+        <help>Username for LAN clients when the proxy is exposed. Only letters, digits and the characters . _ @ - are allowed (1-32 characters); invalid values fall back to mihomo.</help>
+    </field>
 </form>

@@ -33,7 +33,15 @@ class IndexController extends \OPNsense\Base\IndexController
     public function indexAction()
     {
         $this->view->generalForm = $this->getForm('general');
+        $this->view->subscriptionForm = $this->getForm('subscription');
+        $this->view->rulesForm = $this->getForm('rules');
         $this->view->pick('OPNsense/Mihomo/index');
+    }
+
+    public function rulesAction()
+    {
+        $this->view->rulesForm = $this->getForm('rules');
+        $this->view->pick('OPNsense/Mihomo/rules');
     }
 
     public function statusAction()

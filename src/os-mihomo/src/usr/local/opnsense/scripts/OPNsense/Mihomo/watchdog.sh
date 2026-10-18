@@ -3,7 +3,8 @@ set -eu
 
 # Mihomo fail-open watchdog (socks-core mode)
 # 探测对象：进程 / API(9090) / DNS(1053) / 传输层(tun 模式查 tun_mihomo，socks 模式查 7891 监听)
-# 本模式不修改 Unbound、不操作 PF —— 触发 fail-open 仅停掉 mihomo，
+# 本模式不改 Unbound、不动主规则集；transport=transparent 时 fail-open 仅清空
+# mihomo-transport anchor 恢复直连（route-to 不再指向已停的 socks 端口），
 # DNS 由 AdGuardHome 的 fallback 上游自然回退，直连流量不受影响。
 
 STATE_RUN_FILE="/var/run/mihomo_state.json"
@@ -12,6 +13,8 @@ PID_FILE="/var/run/mihomo.pid"
 LOG_FILE="/var/log/mihomo_watchdog.log"
 CONFIG_FILE="/usr/local/etc/mihomo/config.yaml"
 SERVICE_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
+TRANSPORT_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+TRANSPORT_MODE_FILE="/var/db/os-mihomo/transport-mode"
 BIN="/usr/local/bin/mihomo"
 CONF_DIR="/usr/local/etc/mihomo"
 TUN_DEV="tun_mihomo"
@@ -41,6 +44,15 @@ get_current_state() {
     fi
 }
 
+# 当前传输层模式（transport_manager.sh 维护）：文件缺失/读取失败/未知值一律按普通代理处理
+transport_mode_now() {
+    _tmode="$(cat "$TRANSPORT_MODE_FILE" 2>/dev/null || true)"
+    case "$_tmode" in
+        transparent) echo "transparent" ;;
+        *) echo "proxy" ;;
+    esac
+}
+
 port_listening() {
     # $1 = port
     sockstat -4 -l -p "$1" 2>/dev/null | grep -q "$1" || sockstat -4 -l 2>/dev/null | grep -q "127.0.0.1:$1"
@@ -50,12 +62,17 @@ trigger_failopen() {
     reason="$1"
     log "CRITICAL: Triggering Fail-Open bypass -> Reason: $reason"
 
-    # 停止进程、清理状态（socks 模式下无 TUN/anchor/DNS 残留需要清理）
+    # 透明代理模式：先清空 transport anchor 恢复直连，防 route-to 指向即将停止的 7891 死端口。
+    # 无条件执行（幂等）：anchor 为空时无副作用；只操作本插件 anchor，绝不碰主规则集。
+    pfctl -a mihomo-transport -F all 2>/dev/null || true
+    log "Cleared mihomo-transport anchor: LAN traffic returns to direct routing."
+
+    # 停止进程、清理状态（socks 模式下无 TUN/DNS 残留需要清理）
     if [ -x "$SERVICE_MGR" ]; then
         "$SERVICE_MGR" failopen "$reason" || true
     fi
 
-    log "SUCCESS: Fail-Open completed! LAN DNS falls back via AdGuardHome upstream fallback; DIRECT traffic unaffected."
+    log "SUCCESS: Fail-Open completed! mihomo-transport anchor cleared; LAN DNS falls back via AdGuardHome upstream fallback; DIRECT traffic unaffected."
 }
 
 CURR_STATE="$(get_current_state)"
@@ -130,6 +147,15 @@ else
     if ! port_listening 7891; then
         trigger_failopen "Mihomo socks listener (127.0.0.1:7891) is down"
         exit 1
+    fi
+fi
+
+# 全部检查通过（进程/API/DNS/传输层均健康，即 mihomo_healthy）：
+# 透明代理模式下若 anchor 规则被外部清空（规则数为 0），静默幂等重挂。
+if [ "$(transport_mode_now)" = "transparent" ] && [ -x "$TRANSPORT_MGR" ]; then
+    ANCHOR_RULES="$(pfctl -a mihomo-transport -sr 2>/dev/null | grep -c . || true)"
+    if [ "${ANCHOR_RULES:-0}" -eq 0 ]; then
+        "$TRANSPORT_MGR" recover >/dev/null 2>&1 || true
     fi
 fi
 

@@ -1,25 +1,59 @@
 #!/bin/sh
 
-# os-mihomo post-install (socks-core mode)
-# 本模式不写 /conf/config.xml、不改 Unbound、不改 PF 主规则集；
-# 透明代理传输层（hev-socks5-tunnel + PF route-to anchor）由既有体系承担。
-# 注意：本脚本整体内嵌进 +MANIFEST 由 pkg 执行，manifest 字符串会破坏反斜杠续行，禁止使用。
+# os-mihomo post-install (socks-core mode + upgrade protection)
+# 本模式不写 /conf/config.xml、不改 Unbound；PF 只允许 mihomo-transport anchor。
+# 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切 % 字符。
+# 严格顺序：① 快照恢复（缺失项用 sample 兜底） ② secret 仅在缺失时生成
+# ③ 健康门禁 ④ 按模型幂等重挂透明代理传输层。
 
 echo "===> Configuring os-mihomo (socks-core mode)"
 
+CONF_DIR=/usr/local/etc/mihomo
+SNAP_DIR=/var/db/os-mihomo/pre-upgrade
+
 mkdir -p /etc/rc.conf.d /var/db/os-mihomo
-echo 'mihomo_enable="YES"' > /etc/rc.conf.d/mihomo
-touch /var/log/mihomo.log /var/log/mihomo_sub.log /var/log/mihomo_watchdog.log 2>/dev/null || true
+touch /var/log/mihomo.log /var/log/mihomo_sub.log /var/log/mihomo_watchdog.log /var/log/mihomo_hev.log 2>/dev/null || true
+
+# rc.conf.d 仅在缺失时写 enable=YES（不覆盖用户禁用状态）
+if [ ! -f /etc/rc.conf.d/mihomo ]; then
+    echo 'mihomo_enable="YES"' > /etc/rc.conf.d/mihomo
+fi
+if [ ! -f /etc/rc.conf.d/mihomo_hev ]; then
+    echo 'mihomo_hev_enable="YES"' > /etc/rc.conf.d/mihomo_hev
+fi
+
+# ---- Step 1: restore user data from pre-upgrade snapshot, fall back to samples ----
+for _f in config.yaml sub/env custom-rules.txt secret.key sub/template_config.yaml; do
+    if [ -f "$SNAP_DIR/$_f" ]; then
+        mkdir -p "$CONF_DIR/$(dirname "$_f")" 2>/dev/null || true
+        cp -f "$SNAP_DIR/$_f" "$CONF_DIR/$_f"
+    fi
+done
+# 缺失项兜底：config.yaml / sub/env 用包内 sample（custom-rules.txt 由运行时生成，不兜底）
+if [ ! -f "$CONF_DIR/config.yaml" ] && [ -f "$CONF_DIR/config.yaml.sample" ]; then
+    cp -f "$CONF_DIR/config.yaml.sample" "$CONF_DIR/config.yaml"
+fi
+if [ ! -f "$CONF_DIR/sub/env" ] && [ -f "$CONF_DIR/sub/env.sample" ]; then
+    mkdir -p "$CONF_DIR/sub" 2>/dev/null || true
+    cp -f "$CONF_DIR/sub/env.sample" "$CONF_DIR/sub/env"
+fi
+# hev.yaml 仅在缺失时从 sample 安装（升级保留用户自定的上游/MTU）
+if [ ! -f "$CONF_DIR/hev.yaml" ] && [ -f "$CONF_DIR/hev.yaml.sample" ]; then
+    cp -f "$CONF_DIR/hev.yaml.sample" "$CONF_DIR/hev.yaml"
+fi
 
 # Script permissions（manifest 内嵌脚本禁止续行，长列表一律单行）
-chmod 0755 /usr/local/etc/mihomo/sub/sub.sh /usr/bin/mihomo_sub /usr/local/etc/rc.d/mihomo 2>/dev/null || true
-chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py 2>/dev/null || true
+chmod 0755 /usr/local/etc/mihomo/sub/sub.sh /usr/bin/mihomo_sub /usr/local/etc/rc.d/mihomo /usr/local/etc/rc.d/mihomo_hev 2>/dev/null || true
+chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php /usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php 2>/dev/null || true
+chmod 0644 /usr/local/etc/mihomo/pf-transport.conf /usr/local/etc/mihomo/config.yaml.sample /usr/local/etc/mihomo/sub/env.sample /usr/local/etc/mihomo/hev.yaml.sample /usr/local/etc/mihomo/sub/sub_lib.sh 2>/dev/null || true
 
-# CSPRNG secret initialization (0600)
-if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
-    /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh generate >/dev/null 2>&1 || true
+# ---- Step 2: secret 仅在 secret.key 缺失/为空时生成（升级保留原 secret） ----
+if [ ! -s /usr/local/etc/mihomo/secret.key ]; then
+    if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
+        /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh generate >/dev/null 2>&1 || true
+    fi
 fi
-chmod 0600 /usr/local/etc/mihomo/secret.key /usr/local/etc/mihomo/config.yaml /usr/local/etc/mihomo/sub/env /usr/local/etc/mihomo/sub/template_config.yaml 2>/dev/null || true
+chmod 0600 /usr/local/etc/mihomo/secret.key /usr/local/etc/mihomo/config.yaml /usr/local/etc/mihomo/sub/env /usr/local/etc/mihomo/sub/template_config.yaml /usr/local/etc/mihomo/hev.yaml /usr/local/etc/mihomo/custom-rules.txt 2>/dev/null || true
 
 # Legacy WebGUI cleanup（仅清理旧版遗留页面，不触碰其他插件）
 rm -f /usr/local/www/mihomo.php /usr/local/www/mihomo_logs.php /usr/local/www/mihomo_sub.php /usr/local/www/mihomo_sub_log.php
@@ -28,12 +62,11 @@ rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cac
 echo "===> Reloading OPNsense services"
 service configd restart >/dev/null 2>&1 || true
 
-echo "===> Starting mihomo (socks-core, no TUN, no DNS/PF changes)"
+echo "===> Starting mihomo (socks-core, no TUN, no DNS changes)"
 service mihomo restart >/dev/null 2>&1 || true
 
-# 健康门禁：确认 socks(7891) / DNS(1053) / API(9090) 就绪；失败仅显著告警，不阻塞包注册，
-# 也不做任何 DNS/PF 变更 —— 本模式天然不影响直连。
-port_up() { sockstat -4 -l 2>/dev/null | grep -q "127.0.0.1:$1"; }
+# ---- Step 3: health gate ----
+port_up() { sockstat -4 -l 2>/dev/null | grep -E "(127.0.0.1|\*|0.0.0.0):$1" >/dev/null; }
 
 HEALTH_OK=0
 _i=0
@@ -52,5 +85,14 @@ else
     echo "WARNING: os-mihomo health check FAILED after install (7891/1053/9090 not ready in 30s)." >&2
     echo "  DIRECT internet and DNS are NOT affected. Check: service mihomo status ; tail -50 /var/log/mihomo.log" >&2
     echo "  Rollback: pkg delete os-mihomo" >&2
-    echo "[$(date '+%F %T')] os-mihomo HEALTH CHECK FAILED after install (7891/1053/9090 not ready in 30s)." > /root/os-mihomo-install-warning.log
+    echo "os-mihomo HEALTH CHECK FAILED after install (7891/1053/9090 not ready in 30s)." > /root/os-mihomo-install-warning.log
+fi
+
+# ---- Step 4: 按模型幂等重挂传输层（仅当模型 transport_mode=transparent 且健康门禁通过） ----
+if [ "$HEALTH_OK" -eq 1 ] && [ -x "$CONF_DIR/../opnsense/scripts/OPNsense/Mihomo/transport_manager.sh" ]; then
+    _MODE=$(php -r '$c=@simplexml_load_file("/conf/config.xml"); $m=$c?$c->xpath("//OPNsense/mihomo/general/transport_mode"):array(); echo (string)(isset($m[0])?$m[0]:"proxy");' 2>/dev/null || echo proxy)
+    if [ "$_MODE" = "transparent" ]; then
+        echo "===> Re-enabling transparent transport (model mode: transparent)"
+        /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh enable || echo "WARNING: transport enable failed; system stays in plain proxy mode (DIRECT LAN unaffected)." >&2
+    fi
 fi

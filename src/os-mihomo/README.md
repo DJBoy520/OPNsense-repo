@@ -23,9 +23,17 @@ Mihomo（原 Clash Meta）是一款高性能、功能丰富的开源代理核心
 ## 架构（socks 核心模式）
 
 - **mihomo 仅作 socks 核心**：socks5 `127.0.0.1:7891`、DNS `127.0.0.1:1053`、RESTful API `127.0.0.1:9090`。所有监听均绑定本地回环。
-- **传输层外置**：透明代理由 hev-socks5-tunnel（`tun0`）+ PF `route-to` 承担，属于路由器既有体系；插件安装/卸载不新增或删除 PF 规则，也不触碰 Unbound。
+- **传输层外置（1.0.5 起可选接管）**：透明代理由 hev-socks5-tunnel（`tun0`）+ PF `route-to` 承担；面板将传输模式切到 transparent 时，插件仅通过自有 `mihomo-transport` anchor（head+quick）下发 route-to 规则并接管 hev 进程，关回 proxy 模式即干净移除；任何情况下不触碰 PF 主规则集与 Unbound。
 - **TUN 在 FreeBSD 不可用**：mihomo 的 sing-tun 后端没有 FreeBSD 实现，开启 TUN 后实测报 `configure tun interface: invalid argument`（见 [MetaCubeX/mihomo issue #1157](https://github.com/MetaCubeX/mihomo/issues/1157)）。因此 `config.yaml` 固定 `tun.enable: false`，**请勿开启**。
 - **Fail-Open**：watchdog 以进程、API(9090)、DNS(1053)、socks(7891) 监听为健康判据；异常时停掉 mihomo 并切回直连，DNS 由上游 fallback 自然回退，主路由不会因代理故障断网。
+
+## 面板化功能（1.0.5）
+
+- **订阅管理**：订阅 URL 只存 MVC 模型并做服务端强校验（仅 https，显式拒绝引号、反引号、控制字符、空白与 `$(`）；`sub/env` 由 configd 动作生成（POSIX 单引号转义，0600）；支持 6h/12h/24h 自动更新（经 OPNsense Cron 模型注册，幂等）；「立即更新」异步触发，前端轮询 `/var/db/os-mihomo/last-sub-update.json` 展示时间/节点数/结果/错误摘要。
+- **透明代理开关**：模型 `transport` 切到 transparent 时，`mihomo_firewall()` 注册 `mihomo-transport` anchor（每次 `filter reload` 自动重建引用，无自愈窗口）；`transport_manager.sh` 只对该 anchor 执行 `pfctl -a ... -f/-F`，永不 `pfctl -f` 主规则集。bypass 用 `<mihomo_bypass>` 表排除（本机自身地址、网关、RFC1918、组播/广播、DHCP），未匹配流量自然落回用户策略，零覆盖。hev-socks5-tunnel 由插件 `mihomo_hev` rc 接管（`script(1)` 伪终端包装、按 pid 停止、禁全局 pkill）。watchdog 判定不健康时清空 anchor 恢复直连，健康恢复后按模型幂等重挂；服务 stop/fail-open 同步收掉传输层，杜绝 route-to 进死端口黑洞。enable 全程 SSH 存活断言，失败即回退。
+- **持久自定义规则**：白名单类型（DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD/IP-CIDR/IP-CIDR6/GEOIP/GEOSITE/DST-PORT）逐行校验（≤200 行、≤32KB，禁引号/花括号/方括号/Tab 等），目标仅允许 DIRECT/REJECT/REJECT-DROP 与模板实际策略组；通过后写 `custom-rules.txt`（0600），订阅合成时插入 `rules:` 顶部，`mihomo -t` 校验失败则生产配置保持不变；报错映射回 custom-rules 行号。订阅节点缓存（`subscription-cache.yaml`）支撑规则应用时离线重组配置，缓存缺失自动降级触发一次在线更新。
+- **升级配置保护**：`+PRE_INSTALL` 先停传输层与进程（SIGTERM 宽限→超时 SIGKILL），把 config.yaml/sub/env/custom-rules.txt/secret.key/template 快照到 `/var/db/os-mihomo/pre-upgrade/`（0600）；`+POST_INSTALL` 严格按「快照恢复→sample 兜底→secret 仅缺失时生成→健康门禁→按模型重挂传输层」执行，升级/重装不再丢订阅与密钥。
+- **LAN 暴露（默认关闭）**：默认 mixed-port 7890 仅绑 `127.0.0.1`（本机代理）；面板显式开启后改绑 `0.0.0.0` 并强制 authentication（用户可配，密码复用 API secret）+ `lan-allowed-ips` 限定 LAN 网段，健康门禁同步改探测 LAN 绑定。无认证的局域网开放代理不做。
 
 ## 项目程序
 
@@ -48,12 +56,12 @@ https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-freebsd-am
 - **订阅原子更新**：订阅 URL 仅允许 `https://`，日志掩码到 host 级；合成配置先由 `mihomo -t` 校验，通过后才备份并原子替换 `config.yaml`，坏订阅永远不会覆盖生产配置。
 - **API 本地保护**：Clash API 强制绑定 `127.0.0.1:9090`，面板经 SSH 隧道访问，勿暴露到外网。
 - **Fail-Open 故障旁路**：watchdog 巡检进程/API/DNS/socks 监听，异常时切回直连。
-- **零系统侵入**：安装与卸载不修改 `/conf/config.xml`、Unbound 与 PF 主规则集，避免与既有网络体系互相污染。
+- **零系统侵入**：Unbound 永不触碰；`/conf/config.xml` 仅允许模型 API 写入 `//OPNsense/mihomo` 与 `//OPNsense/cron` 两个节点；PF 只允许自有 `mihomo-transport` anchor（只含 pass/route-to，禁止 block/reject），主规则集永不篡改。
 
 ## 注意事项
 
 1. 当前仅支持 x86_64 / amd64 平台。
-2. 插件不创建 TUN、不下发 PF 规则；透明代理依赖路由器既有的 hev-socks5-tunnel + PF route-to 体系。
+2. mihomo 的 TUN 仍必须保持关闭（FreeBSD 无 sing-tun 实现）；透明代理传输在 transparent 模式下由插件托管的 hev-socks5-tunnel（`tun0`，需 `if_tun` 内核模块）+ `mihomo-transport` anchor 承担，proxy 模式下完全不涉及。
 3. 安装调试完成后，将日志层级调整为 `error`，避免长期运行产生过多日志。
 4. Clash API 仅监听 `127.0.0.1:9090`，面板通过 SSH 隧道访问，**请勿将 9090 端口暴露至外网**。
 5. 必须保持 `tun.enable: false`：FreeBSD 无 sing-tun 实现，开启会导致启动失败（issue #1157）。

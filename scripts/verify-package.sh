@@ -129,6 +129,42 @@ for PKG_PATH in "${PKG_FILES[@]}"; do
         die "Binary usr/local/bin/mihomo is not a FreeBSD 64-bit ELF executable: $FILE_OUT"
     fi
     log "Mihomo binary confirmed as FreeBSD 64-bit ELF"
+
+    # 5b. Verify pre-install script, panel feature files, clean tree, and pf safety
+    # 1.0.2 / 1.0.4 是面板化之前的遗留产物：以下断言只对 1.0.5+ 生效
+    case "$PKG_VERSION" in
+        1.0.2|1.0.4) ;;
+        *)
+    log "Step 5b: Verifying pre-install script, panel feature files, clean tree, and pf safety"
+    grep -q '"pre-install"' "$MANIFEST" || die "scripts section in $MANIFEST does not contain pre-install"
+
+    REQUIRED_PANEL_FILES=(
+        "usr/local/etc/mihomo/pf-transport.conf"
+        "usr/local/etc/mihomo/hev.yaml.sample"
+        "usr/local/etc/mihomo/config.yaml.sample"
+        "usr/local/etc/mihomo/sub/env.sample"
+        "usr/local/etc/mihomo/sub/sub_lib.sh"
+        "usr/local/etc/rc.d/mihomo_hev"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php"
+        "usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+    )
+    for pfile in "${REQUIRED_PANEL_FILES[@]}"; do
+        [ -f "$EXTRACT_DIR/$pfile" ] || die "Required panel file missing in package: $pfile (at $EXTRACT_DIR/$pfile)"
+    done
+
+    PYCACHE_FOUND="$(find "$EXTRACT_DIR" -name __pycache__ -o -name '*.pyc')"
+    [ -z "$PYCACHE_FOUND" ] || die "Package contains python cache files or directories: $PYCACHE_FOUND"
+
+    PF_CONF="$EXTRACT_DIR/usr/local/etc/mihomo/pf-transport.conf"
+    if grep -Eiq '^[[:space:]]*(block|reject)' "$PF_CONF"; then
+        die "pf-transport.conf contains block or reject rules"
+    fi
+    log "Step 5b verified: pre-install declared, all panel files present, no pycache, safe pf rules"
+        ;;
+    esac
 done
 
 # 6. Verify build-info.json format and required fields

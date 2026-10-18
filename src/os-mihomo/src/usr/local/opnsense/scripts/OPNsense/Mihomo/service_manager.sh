@@ -19,6 +19,12 @@ TUN_DEV="tun_mihomo"
 API_URL="http://127.0.0.1:9090"
 API_TIMEOUT=30
 
+# 传输层与面板状态：transport_manager.sh 维护 transport-mode（模式意图），
+# PHP 面板把 LAN 暴露开关写入 panel-state.env
+TRANSPORT_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+TRANSPORT_MODE_FILE="/var/db/os-mihomo/transport-mode"
+PANEL_STATE="/var/db/os-mihomo/panel-state.env"
+
 mkdir -p /var/run "${STATE_DB_DIR}" 2>/dev/null || true
 
 get_timestamp() {
@@ -120,12 +126,35 @@ tun_enabled() {
     ' "${CONF_FILE}" 2>/dev/null
 }
 
-# 传输层就绪检查：TUN 模式查 tun_mihomo；socks 模式查 7891 监听
+# 当前传输层模式（transport_manager.sh 维护）：文件缺失、读取失败或未知值一律按普通代理处理
+transport_mode_now() {
+    _tmode="$(cat "${TRANSPORT_MODE_FILE}" 2>/dev/null || true)"
+    case "${_tmode}" in
+        transparent) echo "transparent" ;;
+        *) echo "proxy" ;;
+    esac
+}
+
+# 面板“LAN 暴露”开关：panel-state.env 中 MIHOMO_LAN_EXPOSE=1 时为真，默认关闭
+lan_expose_on() {
+    MIHOMO_LAN_EXPOSE=0
+    if [ -f "${PANEL_STATE}" ]; then
+        . "${PANEL_STATE}" 2>/dev/null || true
+    fi
+    [ "${MIHOMO_LAN_EXPOSE:-0}" = "1" ]
+}
+
+# 传输层就绪检查：TUN 模式查 tun_mihomo；socks 模式按 LAN 暴露开关匹配 7891 的实际绑定地址
 check_transport_ready() {
     if tun_enabled; then
         check_tun_ready
+    elif lan_expose_on; then
+        # LAN 暴露：bind-address 为 '*'，监听出现在 0.0.0.0 或 *（不同 sockstat 版本显示不同）
+        sockstat -4 -l -p 7891 2>/dev/null | grep -q '0\.0\.0\.0:7891' && return 0
+        sockstat -4 -l -p 7891 2>/dev/null | grep -q '\*:7891'
     else
-        sockstat -4 -l -p 7891 2>/dev/null | grep -q 7891 || sockstat -4 -l 2>/dev/null | grep -q '127.0.0.1:7891'
+        # 默认仅绑回环：必须看到 127.0.0.1:7891，不接受其它地址冒充当就绪
+        sockstat -4 -l -p 7891 2>/dev/null | grep -q '127\.0\.0\.1:7891'
     fi
 }
 
@@ -221,6 +250,12 @@ do_start() {
     # 7. Health check passed -> RUNNING / PROXY
     set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode ($(transport_name))"
     echo "Mihomo started successfully (PID ${_pid}, mode PROXY, transport $(transport_name))."
+
+    # 8. 透明代理模式：健康通过后幂等重挂 transport anchor；
+    #    传输层失败不改变服务状态（保持 RUNNING），由 watchdog 兜底重试
+    if [ "$(transport_mode_now)" = "transparent" ] && [ -x "${TRANSPORT_MGR}" ]; then
+        "${TRANSPORT_MGR}" enable || echo "Warning: transparent transport re-enable failed; mihomo stays RUNNING, watchdog will retry." >&2
+    fi
     return 0
 }
 
@@ -283,6 +318,12 @@ do_stop() {
     _curr_pid="$(get_current_pid)"
     set_state "STOPPING" "DIRECT" "${_curr_pid:-null}" "Service is stopping"
 
+    # 透明代理模式：停机前先临时拆除传输层（flush 只拆 anchor+hev、不改模式意图），
+    # 防 route-to 指向即将关闭的 7891（死端口黑洞）；重启后 do_start 仍按 transparent 幂等重挂
+    if [ "$(transport_mode_now)" = "transparent" ] && [ -x "${TRANSPORT_MGR}" ]; then
+        "${TRANSPORT_MGR}" flush || true
+    fi
+
     do_stop_internal
     cleanup_routing_and_pf
 
@@ -343,6 +384,8 @@ do_healthcheck() {
     _tun_ok=0
     _api_ok=0
 
+    # 端口探测复用 check_transport_ready：socks 模式下按 LAN 暴露开关匹配
+    # 0.0.0.0/*:7891（开）或 127.0.0.1:7891（关）
     if check_transport_ready; then
         _tun_ok=1
     fi
@@ -393,11 +436,17 @@ do_failopen() {
     
     # 1. Terminate any stuck/zombie processes
     do_stop_internal || true
-    
-    # 2. Cleanup TUN device & routing
+
+    # 2. 透明代理模式：停机后临时拆除传输层（flush 保留模式意图，健康恢复后 recover 可重挂），
+    #    恢复直连（防 route-to 打向死端口）
+    if [ "$(transport_mode_now)" = "transparent" ] && [ -x "${TRANSPORT_MGR}" ]; then
+        "${TRANSPORT_MGR}" flush || true
+    fi
+
+    # 3. Cleanup TUN device & routing
     cleanup_routing_and_pf
     
-    # 3. Mark state as FAILED in DIRECT fallback mode
+    # 4. Mark state as FAILED in DIRECT fallback mode
     set_state "FAILED" "DIRECT" null "Fail-Open activated: ${_reason}"
     echo "Fail-Open completed. State: FAILED, Mode: DIRECT."
     return 0

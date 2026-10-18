@@ -37,6 +37,10 @@ calc_sha256() {
 command -v tar >/dev/null 2>&1 || die "tar command not found"
 command -v gzip >/dev/null 2>&1 || die "gzip command not found"
 
+need_file() {
+    [ -e "$SOURCE_DIR/$1" ] || die "missing required file: $1"
+}
+
 # 1. Read PKG_NAME and VERSION
 VERSION_FILE="$SOURCE_DIR/src/usr/local/opnsense/version/mihomo"
 MAKEFILE="$SOURCE_DIR/Makefile"
@@ -58,7 +62,7 @@ if [ -z "$VERSION" ] && [ -f "$MAKEFILE" ]; then
 fi
 
 PKG_NAME="${PKG_NAME:-os-mihomo}"
-VERSION="${VERSION:-1.0.2}"
+VERSION="${VERSION:-1.0.5}"
 ORIGIN="${ORIGIN:-opnsense/$PKG_NAME}"
 COMMENT="${COMMENT:-Mihomo proxy integration for OPNsense}"
 MAINTAINER="${MAINTAINER:-https://github.com/Opnwall/}"
@@ -71,6 +75,24 @@ OUTPUT_PKG="$OUTPUT_DIR/${PKG_NAME}-${VERSION}.pkg"
 echo "==> Building package $PKG_NAME-$VERSION"
 echo "==> Source directory: $SOURCE_DIR"
 echo "==> Output directory: $OUTPUT_DIR"
+
+need_file "packaging/freebsd/+PRE_INSTALL"
+need_file "src/usr/local/etc/mihomo/pf-transport.conf"
+need_file "src/usr/local/etc/mihomo/hev.yaml.sample"
+need_file "src/usr/local/etc/mihomo/config.yaml.sample"
+need_file "src/usr/local/etc/mihomo/sub/env.sample"
+need_file "src/usr/local/etc/mihomo/sub/sub_lib.sh"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php"
+need_file "src/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+need_file "src/usr/local/etc/rc.d/mihomo_hev"
+need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/Api/SubscriptionController.php"
+need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/Api/RulesController.php"
+need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/forms/subscription.xml"
+need_file "src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/forms/rules.xml"
+need_file "src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/rules.volt"
 
 # Clean & Prepare directories
 rm -rf "$WORK_DIR"
@@ -155,18 +177,21 @@ echo "==> Staged $ZASH_FILE_COUNT zashboard files in usr/local/etc/mihomo/ui"
 
 # 5. Set executable permissions
 [ -f "$STAGE_DIR/usr/local/etc/mihomo/sub/sub.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/etc/mihomo/sub/sub.sh"
+[ -f "$STAGE_DIR/usr/local/etc/mihomo/sub/sub_lib.sh" ] && chmod 0644 "$STAGE_DIR/usr/local/etc/mihomo/sub/sub_lib.sh"
 [ -f "$STAGE_DIR/usr/bin/mihomo_sub" ] && chmod 0755 "$STAGE_DIR/usr/bin/mihomo_sub"
 [ -f "$STAGE_DIR/usr/local/etc/rc.d/mihomo" ] && chmod 0755 "$STAGE_DIR/usr/local/etc/rc.d/mihomo"
+[ -f "$STAGE_DIR/usr/local/etc/rc.d/mihomo_hev" ] && chmod 0755 "$STAGE_DIR/usr/local/etc/rc.d/mihomo_hev"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_unbound.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_unbound.php"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_firewall.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_firewall.php"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh"
 [ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh"
-[ -f "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_firewall.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/mihomo/setup_firewall.php"
-[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
-[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh"
-[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh"
+[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh"
+[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php"
+[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php"
+[ -f "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php" ] && chmod 0755 "$STAGE_DIR/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
 
 # 6. Compute SHA256 and flatsize for all staged files
 PLIST="$WORK_DIR/pkg-plist"
@@ -208,6 +233,11 @@ echo "==> Generating metadata (+MANIFEST)"
     done < "$PLIST"
     printf '}\n'
     printf 'scripts: {\n'
+    printf '    "pre-install": <<EOS\n'
+    if [ -f "$SOURCE_DIR/packaging/freebsd/+PRE_INSTALL" ]; then
+        cat "$SOURCE_DIR/packaging/freebsd/+PRE_INSTALL"
+    fi
+    printf '\nEOS\n'
     printf '    "post-install": <<EOS\n'
     if [ -f "$SOURCE_DIR/packaging/freebsd/+POST_INSTALL" ]; then
         cat "$SOURCE_DIR/packaging/freebsd/+POST_INSTALL"

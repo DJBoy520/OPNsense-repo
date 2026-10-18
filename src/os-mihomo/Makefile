@@ -1,5 +1,5 @@
 PKG_NAME?=	os-mihomo
-VERSION?=	1.0.2
+VERSION?=	1.0.5
 ABI?=		universal
 
 .PHONY: package install clean

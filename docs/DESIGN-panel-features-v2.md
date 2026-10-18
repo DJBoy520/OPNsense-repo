@@ -88,3 +88,10 @@
 
 - 实施 = 1.0.5；磁盘版 VM 全量演练（含重启自启、F2 on/off SSH 存活、F4 升级保留、payload 注入回归）全部通过后才可提请生产窗口。
 - 红线更新：config.xml 仅允许 `//OPNsense/mihomo` 与 `//OPNsense/cron` 经模型 API 写入；PF 仅允许 mihomo-transport anchor（head+quick，只 pass/route-to）；Unbound 永不触碰。
+
+## 实施修订记录（2026-10-18，主控审计定稿）
+
+1. **D2 bypass 改为表排除法**（替代 D2 原文「bypass 逐条 quick pass 规则」）：anchor 内的 route-to 规则写成 `to ! <mihomo_bypass>`（表内含本机地址、网关、RFC1918、组播 224/4、240/4、255.255.255.255、0.0.0.0/8），不匹配的包自然落回主规则集。原因：原方案 bypass pass 带 quick 会先于用户策略命中，把管理员自己的 block 规则短路掉（比如对特定 LAN 客户端的封锁）。Gemini 强制清单中的 bypass 目的地一个不少，只是实现更保守。
+2. **F1 cron 注册移到 MVC 控制器**（替代「sub-env-write 动作内用 Cron 模型 API」）：独立 CLI PHP 无法可靠引导 MVC 框架；SubscriptionController::setAction 保存模型后直接经 `\OPNsense\Cron\Model` 注册/禁用每日任务（description 固定 `os-mihomo auto sub-update`），保存后 `cron regenerate`。红线不受影响（cron 仍经模型 API）。另：auto_update=0 时置 enabled=0 而非删除任务项（可逆、避免依赖不确定的 del API）。
+3. **hev.yaml 采用生产实证 schema**：tun0 地址 10.0.0.2、`ipv4-gateway: 10.0.0.1`（route-to 目标保持 `(tun0 10.0.0.1)`）、mtu 1500；hev-socks5-tunnel 在 FreeBSD 需要伪终端，`mihomo_hev` rc 用 `daemon -p` 包 `script -q /dev/null` 启动，stop 严格按 pid（必要时按 pid 找子进程），禁全局 pkill（生产只读核实，2026-10-18）。
+4. **F2 服务生命周期补强**：service_manager 的 do_stop/do_failopen 在停进程前先 transport-disable（flush anchor + 停 hev），do_start 在健康通过后按 transport-mode 幂等 enable——彻底杜绝「mihomo 停了 anchor 还在」的 route-to 黑洞窗口；watchdog fail-open 里保留 `pfctl -a mihomo-transport -F all` 作为双保险，全部健康且 anchor 为空时调 recover 幂等重挂。

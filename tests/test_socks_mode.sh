@@ -113,12 +113,21 @@ ROOT_BUILD="$ROOT_DIR/scripts/build.sh"
 
 grep -q 'port_listening 1053' "$WD_SH" || fail "watchdog missing DNS(1053) fallback check"
 grep -Fq 'setup_unbound' "$WD_SH" && fail "watchdog still touches Unbound"
-grep -Fq 'pfctl -a' "$WD_SH" && fail "watchdog still manipulates PF anchors"
+# v1.0.5 起允许 watchdog 仅操作 mihomo-transport anchor（fail-open 清空 + recover 重挂）：
+# 出现任何未锚定到 mihomo-transport 的 pfctl 调用仍视为违规
+if grep -n 'pfctl' "$WD_SH" | grep -Ev 'pfctl -a mihomo-transport'; then
+    fail "watchdog uses pfctl outside the mihomo-transport anchor"
+fi
 grep -q 'tun_enabled()' "$SM_SH" || fail "service_manager missing tun_enabled() (socks mode)"
 awk '/Already running/{a=NR} /Config validation/{b=NR} END{exit !(a && b && a<b)}' "$SM_SH" || \
     fail "service_manager must check running instance before config validation"
 grep -q 'os-mihomo-removed' "$POST_DEINSTALL" || fail "+POST_DEINSTALL should archive config instead of deleting"
-grep -q 'ENVIRON' "$SUB_SH" || fail "sub.sh secret must pass via ENVIRON (not argv)"
+# v1.0.5 起 secret 注入逻辑位于 sub_lib.sh 的 compose 函数（sub.sh 只负责编排），
+# ENVIRON 传递（不进 argv）的约束断言随之指向库文件
+SUB_LIB_SH="$ROOT_DIR/src/os-mihomo/src/usr/local/etc/mihomo/sub/sub_lib.sh"
+grep -q 'ENVIRON' "$SUB_LIB_SH" || fail "sub_lib.sh secret must pass via ENVIRON (not argv)"
+grep -qE 'secret[[:space:]]*:' "$SUB_SH" && grep -qE 'printf .secret:' "$SUB_SH" && \
+    fail "sub.sh must not inject secret directly anymore (moved to sub_lib compose)"
 grep -q 'mktemp' "$SEC_SH" || fail "secret_manager still leaks secret via argv"
 grep -q 'mihomo_watchdog.log' "$NEW_SYSLOG" || fail "newsyslog missing watchdog log rotation"
 grep -q 'createElement($missing)' "$SETUP_UNBOUND" || fail "setup_unbound.php missing missing-node autorepair"
@@ -127,7 +136,8 @@ grep -q 'ZASH_STAGE' "$ROOT_BUILD" || fail "root build.sh does not stage bundled
 grep -q 'geo-auto-update: false' "$CONFIG" || fail "config.yaml must disable geo auto update"
 grep -Eq '^[[:space:]]*external-ui-url:' "$CONFIG" && fail "config.yaml must not carry external-ui-url (runtime download)"
 grep -q '禁止使用 http' "$SUB_SH" || fail "sub.sh must reject plain http subscription URLs"
-grep -q '陈旧锁' "$SUB_SH" || fail "sub.sh missing stale-lock cleanup"
+# 陈旧锁自动清理随锁机制一起移入 sub_lib.sh（mihomo_lib_lock_acquire）
+grep -q '陈旧锁' "$SUB_LIB_SH" || fail "sub_lib.sh missing stale-lock cleanup"
 test -f "$ROOT_DIR/scripts/opnsense/backup.sh" && \
 test -f "$ROOT_DIR/scripts/opnsense/rescue.sh" && \
 test -f "$ROOT_DIR/scripts/opnsense/verify.sh" || fail "operator scripts (backup/rescue/verify) missing"

@@ -1,0 +1,8 @@
+<form>
+    <field>
+        <id>mihomo.customRules.content</id>
+        <label>Custom Rules</label>
+        <type>textarea</type>
+        <help>One rule per line: TYPE,PAYLOAD,TARGET (optionally suffixed with ,no-resolve for IP-CIDR, IP-CIDR6 and GEOIP). Allowed types: DOMAIN, DOMAIN-SUFFIX, DOMAIN-KEYWORD, IP-CIDR, IP-CIDR6, GEOIP, GEOSITE, DST-PORT. Targets: DIRECT, REJECT, REJECT-DROP or a proxy-group name from the template. Limits: 200 lines / 32768 bytes.</help>
+    </field>
+</form>
