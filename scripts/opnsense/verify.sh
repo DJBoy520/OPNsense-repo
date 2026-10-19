@@ -9,6 +9,32 @@ PASS=0
 FAIL=0
 CRITICAL_FAIL=0
 
+# external-controller 端口解析（§2.3）：0.0.0.0 归一化为回环；解析失败用默认值
+CONFIG_FILE=/usr/local/etc/mihomo/config.yaml
+API_PORT=9090
+if [ -r "$CONFIG_FILE" ]; then
+    _api_raw="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+      /^external-controller:[[:space:]]*/ {
+          line = $0
+          sub(/^external-controller:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+#.*$/, "", line)
+          gsub(/[[:space:]]+$/, "", line)
+          gsub(/"/, "", line)
+          gsub(sq, "", line)
+          n = split(line, p, ":")
+          if (n == 2 && p[2] ~ /^[0-9]+$/ && (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+              print p[2]
+              found = 1
+          }
+          exit
+      }
+    ' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$_api_raw" ]; then
+        API_PORT="$_api_raw"
+    fi
+fi
+
 ok()   { PASS=$((PASS+1));   echo "[PASS] $1"; }
 bad()  { FAIL=$((FAIL+1));  echo "[FAIL] $1"; [ "${2:-no}" = "critical" ] && CRITICAL_FAIL=1; }
 info() { echo "[INFO] $1"; }
@@ -20,7 +46,7 @@ else
     bad "AdGuardHome 未监听 :53（LAN DNS 生命线）" critical
 fi
 
-# 2. mihomo 三个监听：1053(DNS) / 7891(socks) / 9090(API)
+# 2. mihomo 三个监听：1053(DNS) / 7891(socks) / API（端口由 config.yaml 解析）
 M_PIDS="$(pgrep -f '/usr/local/bin/mihomo' | head -1 || true)"
 if [ -n "${M_PIDS}" ]; then
     ok "mihomo 进程运行 (pid ${M_PIDS})"
@@ -28,10 +54,10 @@ else
     bad "mihomo 进程不存在" critical
 fi
 
-for spec in "1053 DNS" "7891 socks" "9090 api"; do
+for spec in "1053 DNS" "7891 socks" "${API_PORT} api"; do
     _p="${spec%% *}"
     _n="${spec#* }"
-    _line="$(sockstat -4 -l 2>/dev/null | grep "mihomo" | grep ":${_p} " | head -1 || true)"
+    _line="$(sockstat -l 2>/dev/null | grep "mihomo" | grep ":${_p} " | head -1 || true)"
     if [ -n "${_line}" ]; then
         ok "mihomo ${_n} 监听 :${_p}"
     else

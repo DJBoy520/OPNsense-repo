@@ -16,12 +16,13 @@ CONF_FILE="${CONF_DIR}/config.yaml"
 PID_FILE="/var/run/mihomo.pid"
 LOG_FILE="/var/log/mihomo.log"
 TUN_DEV="tun_mihomo"
-API_URL="http://127.0.0.1:9090"
 API_TIMEOUT=30
 
 # 传输层与面板状态：transport_manager.sh 维护 transport-mode（模式意图），
 # PHP 面板把 LAN 暴露开关写入 panel-state.env
 TRANSPORT_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+API_BIND_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh"
+SUB_LIB_FILE="${MIHOMO_SUB_LIB:-/usr/local/etc/mihomo/sub/sub_lib.sh}"
 TRANSPORT_MODE_FILE="/var/db/os-mihomo/transport-mode"
 PANEL_STATE="/var/db/os-mihomo/panel-state.env"
 
@@ -93,13 +94,74 @@ cleanup_routing_and_pf() {
     # In OPNsense, DIRECT mode is normal default gateway routing without TUN
 }
 
+# external-controller 探测地址（§2.3 配置驱动）：优先复用 sub_lib.sh 的
+# mihomo_lib_api_addr；库缺失时用本地同语义解析兜底（0.0.0.0 → 127.0.0.1）。
+api_addr_now() {
+    if [ -r "${SUB_LIB_FILE}" ]; then
+        _addr="$( . "${SUB_LIB_FILE}" 2>/dev/null; mihomo_lib_api_addr "${CONF_FILE}" 2>/dev/null || true )"
+    else
+        _addr="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+          /^external-controller:[[:space:]]*/ {
+              line = $0
+              sub(/^external-controller:[[:space:]]*/, "", line)
+              sub(/[[:space:]]+#.*$/, "", line)
+              gsub(/[[:space:]]+$/, "", line)
+              gsub(/"/, "", line)
+              gsub(sq, "", line)
+              n = split(line, p, ":")
+              if (n == 2 && p[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+                  p[2] ~ /^[0-9]+$/ &&
+                  (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+                  print p[1], p[2]
+                  found = 1
+              }
+              exit
+          }
+        ' "${CONF_FILE}" 2>/dev/null || true)"
+        if [ -z "${_addr}" ]; then
+            _addr="127.0.0.1 9090"
+        else
+            _addr_host="${_addr% *}"
+            if [ "${_addr_host}" = "0.0.0.0" ]; then
+                _addr="127.0.0.1 ${_addr#* }"
+            fi
+        fi
+    fi
+    case "${_addr}" in
+        *' '*) printf '%s\n' "${_addr}" ;;
+        *) printf '127.0.0.1 9090\n' ;;
+    esac
+}
+
+# API 监听探测：sockstat 不带 -4（tcp46 通配在 -4 下可能不可见），
+# 只匹配本端口上的 mihomo 行；解析后的 0.0.0.0 已归一为回环，因此通配绑定也算就绪
+api_listening() {
+    _host="$1"
+    _port="$2"
+    _out="$(sockstat -l -p "${_port}" 2>/dev/null || true)"
+    [ -n "${_out}" ] || return 1
+    printf "%s\n" "${_out}" | awk -v want="${_host}:${_port}" -v p="${_port}" '
+        $1 == "mihomo" || $2 == "mihomo" {
+            for (i = 1; i <= NF; i++) {
+                if ($i == want) found = 1
+                if ($i == "*:" p || $i == "0.0.0.0:" p) found = 1
+            }
+        }
+        END { exit !found }
+    '
+}
+
 check_api_ready() {
     _elapsed=0
+    _api_addr="$(api_addr_now)"
+    _api_host="${_api_addr% *}"
+    _api_port="${_api_addr#* }"
     while [ "${_elapsed}" -lt "${API_TIMEOUT}" ]; do
-        if curl -s -m 2 "${API_URL}" >/dev/null 2>&1; then
+        if curl -s -m 2 "http://${_api_host}:${_api_port}" >/dev/null 2>&1; then
             return 0
         fi
-        if sockstat -4 -l -p 9090 2>/dev/null | grep -q 9090; then
+        if api_listening "${_api_host}" "${_api_port}"; then
             return 0
         fi
         sleep 1
@@ -195,7 +257,15 @@ do_start() {
         rm -f "${PID_FILE}"
     fi
 
-    # 2. Config validation
+    # 2. API 绑定收敛（§2.4：panel-state → config.yaml/template）
+    # 失败仅告警：本文件 set -eu，必须用 if ! 包裹；reconcile 自身也保证不非 0
+    if [ -x "${API_BIND_MGR}" ]; then
+        if ! "${API_BIND_MGR}" reconcile; then
+            echo "Warning: api bind reconcile failed; keeping current configuration." >&2
+        fi
+    fi
+
+    # 3. Config validation
     if [ ! -f "${CONF_FILE}" ]; then
         cleanup_routing_and_pf
         set_state "FAILED" "DIRECT" null "Configuration file not found: ${CONF_FILE}"
@@ -232,24 +302,42 @@ do_start() {
     fi
 
     # 5. Check API ready (30s timeout)
+    # §2.6 控制面/数据面解耦：API 不可达不再终止服务（绑定可变后 API 死 != 核心死，
+    # 误杀会连带 1053 DNS 失效）。失败时按 panel-state reconcile 并再重载一次；
+    # 仍失败则保持运行，由数据面（socks/DNS）判据决定状态。
+    _api_ok=1
     if ! check_api_ready; then
-        do_stop_internal
-        cleanup_routing_and_pf
-        set_state "FAILED" "DIRECT" null "API failed to respond within ${API_TIMEOUT}s"
-        echo "Mihomo API healthcheck timed out."
-        return 1
+        _api_ok=0
+        echo "Warning: Mihomo API did not respond within ${API_TIMEOUT}s; keeping the service running (data plane is authoritative)." >&2
+        if [ -x "${API_BIND_MGR}" ]; then
+            "${API_BIND_MGR}" reconcile >/dev/null 2>&1 || true
+        fi
+        # 进程仍存活才重载；进程已退出时 do_reload 会回调 do_start（防递归）
+        if [ -n "$(get_current_pid)" ]; then
+            do_reload >/dev/null 2>&1 || true
+        fi
+        if check_api_ready; then
+            _api_ok=1
+        else
+            echo "Warning: API still unresponsive after api-bind reconcile; mihomo stays running (socks/DNS unaffected)." >&2
+        fi
     fi
 
     # 6. Transport check (TUN 模式查 tun_mihomo；socks-core 模式查 7891 监听)
     if ! check_transport_ready; then
-        set_state "DEGRADED" "DIRECT" "${_pid}" "API is ready but transport ($(transport_name)) is DOWN"
+        set_state "DEGRADED" "DIRECT" "${_pid}" "Transport ($(transport_name)) is DOWN"
         echo "Warning: Mihomo started but transport ($(transport_name)) is not detected."
         return 0
     fi
 
-    # 7. Health check passed -> RUNNING / PROXY
-    set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode ($(transport_name))"
-    echo "Mihomo started successfully (PID ${_pid}, mode PROXY, transport $(transport_name))."
+    # 7. Health check passed -> RUNNING / PROXY（API DOWN 但数据面 UP 也保持运行并告警）
+    if [ "${_api_ok}" -eq 1 ]; then
+        set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode ($(transport_name))"
+        echo "Mihomo started successfully (PID ${_pid}, mode PROXY, transport $(transport_name))."
+    else
+        set_state "RUNNING" "PROXY" "${_pid}" "Data plane UP ($(transport_name)); API unresponsive, kept running per §2.6"
+        echo "Warning: Mihomo is running with transport $(transport_name) UP but API DOWN; service kept alive." >&2
+    fi
 
     # 8. 透明代理模式：健康通过后幂等重挂 transport anchor；
     #    传输层失败不改变服务状态（保持 RUNNING），由 watchdog 兜底重试
@@ -390,7 +478,11 @@ do_healthcheck() {
         _tun_ok=1
     fi
 
-    if curl -s -m 2 "${API_URL}" >/dev/null 2>&1 || sockstat -4 -l -p 9090 2>/dev/null | grep -q 9090; then
+    _api_addr="$(api_addr_now)"
+    _api_host="${_api_addr% *}"
+    _api_port="${_api_addr#* }"
+    if curl -s -m 2 "http://${_api_host}:${_api_port}" >/dev/null 2>&1 || \
+       api_listening "${_api_host}" "${_api_port}"; then
         _api_ok=1
     fi
 

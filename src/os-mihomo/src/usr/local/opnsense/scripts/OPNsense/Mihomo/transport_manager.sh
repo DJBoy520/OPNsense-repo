@@ -14,6 +14,7 @@ HEV_RC="/usr/local/etc/rc.d/mihomo_hev"
 HEV_CONF="/usr/local/etc/mihomo/hev.yaml"
 HEV_SAMPLE="/usr/local/etc/mihomo/hev.yaml.sample"
 PHP="/usr/local/bin/php"
+CONF_FILE="/usr/local/etc/mihomo/config.yaml"
 
 TUN_DEV="${MIHOMO_TUN_DEV:-tun0}"
 HEV_PIDFILE="/var/run/mihomo_hev.pid"
@@ -28,13 +29,55 @@ ssh_alive() {
     kill -0 "${_ppid}" 2>/dev/null
 }
 
-# 检查 mihomo 关键服务健康状态（7891、1053、9090 监听）
+# API 监听地址正则（§2.3 门禁级）：从 config.yaml 原始解析（不归一化），
+# 0.0.0.0 → (\*|0.0.0.0):port；接口 IP → <bind>:port；127.0.0.1 → 仅回环。
+# 解析失败回退到默认端口的三态匹配，避免门禁因配置文件暂不可读而误拒。
+api_listen_regex() {
+    _api_raw=""
+    if [ -r "${CONF_FILE}" ]; then
+        _api_raw="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+          /^external-controller:[[:space:]]*/ {
+              line = $0
+              sub(/^external-controller:[[:space:]]*/, "", line)
+              sub(/[[:space:]]+#.*$/, "", line)
+              gsub(/[[:space:]]+$/, "", line)
+              gsub(/"/, "", line)
+              gsub(sq, "", line)
+              n = split(line, p, ":")
+              if (n == 2 && p[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+                  p[2] ~ /^[0-9]+$/ &&
+                  (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+                  print p[1], p[2]
+                  found = 1
+              }
+              exit
+          }
+        ' "${CONF_FILE}" 2>/dev/null || true)"
+    fi
+    if [ -z "${_api_raw}" ]; then
+        printf '%s\n' '(127\.0\.0\.1|\*|0\.0\.0\.0):9090([[:space:]]|$)'
+        return 0
+    fi
+    _api_host="${_api_raw% *}"
+    _api_port="${_api_raw#* }"
+    if [ "${_api_host}" = "0.0.0.0" ]; then
+        printf '%s\n' '(\*|0\.0\.0\.0):'"${_api_port}"'([[:space:]]|$)'
+    else
+        _api_host_re="$(printf '%s' "${_api_host}" | sed 's/\./\\./g')"
+        printf '%s\n' "${_api_host_re}:${_api_port}([[:space:]]|$)"
+    fi
+}
+
+# 检查 mihomo 关键服务健康状态（7891、1053、external-controller 监听）
 mihomo_healthy() {
-    _sockstat="$(sockstat -4 -l 2>/dev/null || true)"
+    # sockstat 不带 -4：tcp46 通配绑定在 -4 视图下可能缺失
+    _sockstat="$(sockstat -l 2>/dev/null || true)"
     [ -n "${_sockstat}" ] || return 1
     printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):7891([[:space:]]|$)" || return 1
     printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):1053([[:space:]]|$)" || return 1
-    printf "%s\n" "${_sockstat}" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):9090([[:space:]]|$)" || return 1
+    _api_re="$(api_listen_regex)"
+    printf "%s\n" "${_sockstat}" | grep -E -q "${_api_re}" || return 1
     return 0
 }
 
@@ -164,7 +207,7 @@ do_enable() {
 
     # 步骤 3：mihomo 健康门禁（失败退出但不回滚 MODE_FILE，待 recover 修复）
     if ! mihomo_healthy; then
-        echo "错误：mihomo 核心服务健康门禁未通过 (7891/1053/9090 监听未就绪)" >&2
+        echo "错误：mihomo 核心服务健康门禁未通过 (7891/1053/external-controller 监听未就绪)" >&2
         exit 1
     fi
 

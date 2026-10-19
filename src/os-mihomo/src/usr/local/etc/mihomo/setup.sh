@@ -19,6 +19,7 @@ SETUP_PHP=/usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php
 STATUS=/var/db/os-mihomo/last-sub-update.json
 PHP_BIN=/usr/local/bin/php
 ANCHOR="mihomo-transport"
+CONFIG_FILE=/usr/local/etc/mihomo/config.yaml
 
 # 参数解析：环境变量优先，其次位置参数，最后缺省值
 URL="${MIHOMO_SETUP_URL:-${1:-}}"
@@ -156,17 +157,55 @@ fi
 # 步骤 5: 终检报告
 echo "--> 步骤 5/5: 正在检查系统运行健康状态..."
 
-_sockstat="$(sockstat -4 -l 2>/dev/null || true)"
+_sockstat="$(sockstat -l 2>/dev/null || true)"
 
+# external-controller 探测地址（§2.3 零硬编码）：0.0.0.0 归一化为回环；
+# 解析失败回退默认回环地址
+API_HOST="127.0.0.1"
+API_PORT=9090
+_api_raw="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+  /^external-controller:[[:space:]]*/ {
+      line = $0
+      sub(/^external-controller:[[:space:]]*/, "", line)
+      sub(/[[:space:]]+#.*$/, "", line)
+      gsub(/[[:space:]]+$/, "", line)
+      gsub(/"/, "", line)
+      gsub(sq, "", line)
+      n = split(line, p, ":")
+      if (n == 2 && p[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+          p[2] ~ /^[0-9]+$/ &&
+          (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+          print p[1], p[2]
+          found = 1
+      }
+      exit
+  }
+' "$CONFIG_FILE" 2>/dev/null || true)"
+if [ -n "$_api_raw" ]; then
+    API_HOST="${_api_raw% *}"
+    API_PORT="${_api_raw#* }"
+    if [ "$API_HOST" = "0.0.0.0" ]; then
+        API_HOST="127.0.0.1"
+    fi
+fi
+
+# $1=port；$2=可选 host（给出时也接受通配绑定，0.0.0.0 天然覆盖该地址）
 port_listening() {
     _p="$1"
+    _h="${2:-}"
     [ -n "$_sockstat" ] || return 1
-    printf "%s\n" "$_sockstat" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):${_p}([[:space:]]|$)"
+    if [ -z "$_h" ]; then
+        printf "%s\n" "$_sockstat" | grep -E -q "(127\.0\.0\.1|\*|0\.0\.0\.0):${_p}([[:space:]]|$)"
+        return $?
+    fi
+    _hre="$(printf '%s' "$_h" | sed 's/\./\\./g')"
+    printf "%s\n" "$_sockstat" | grep -E -q "(${_hre}|\*|0\.0\.0\.0):${_p}([[:space:]]|$)"
 }
 
 PORT_7891_STATUS="未监听"
 PORT_1053_STATUS="未监听"
-PORT_9090_STATUS="未监听"
+PORT_API_STATUS="未监听"
 ALL_PORTS_OK=1
 
 if port_listening 7891; then
@@ -181,8 +220,8 @@ else
     ALL_PORTS_OK=0
 fi
 
-if port_listening 9090; then
-    PORT_9090_STATUS="监听中"
+if port_listening "$API_PORT" "$API_HOST"; then
+    PORT_API_STATUS="监听中"
 else
     ALL_PORTS_OK=0
 fi
@@ -213,7 +252,7 @@ fi
 echo "==================== 一键配置终检报告 ===================="
 echo "  服务端口 7891 (SOCKS):    $PORT_7891_STATUS"
 echo "  服务端口 1053 (DNS):      $PORT_1053_STATUS"
-echo "  服务端口 9090 (API):      $PORT_9090_STATUS"
+echo "  服务端口 ${API_PORT} (API):      $PORT_API_STATUS"
 echo "  虚拟网卡 tun0:            $TUN_STATUS"
 echo "  PF anchor 规则数:         $ANCHOR_RULE_COUNT"
 echo "  传输层模式文件记录:       $MODE_CONTENT"
@@ -224,6 +263,6 @@ if [ "$ALL_PORTS_OK" -eq 1 ]; then
     echo "os-mihomo 部署就绪，核心服务运行健康。"
     exit 0
 else
-    echo "错误：os-mihomo 核心端口健康检查未通过 (7891/1053/9090)。" >&2
+    echo "错误：os-mihomo 核心端口健康检查未通过 (7891/1053/${API_PORT})。" >&2
     exit 1
 fi

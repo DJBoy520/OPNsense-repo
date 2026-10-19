@@ -62,7 +62,7 @@ if [ -z "$VERSION" ] && [ -f "$MAKEFILE" ]; then
 fi
 
 PKG_NAME="${PKG_NAME:-os-mihomo}"
-VERSION="${VERSION:-1.0.7}"
+VERSION="${VERSION:-1.0.8}"
 ORIGIN="${ORIGIN:-opnsense/$PKG_NAME}"
 COMMENT="${COMMENT:-Mihomo proxy integration for OPNsense}"
 MAINTAINER="${MAINTAINER:-https://github.com/Opnwall/}"
@@ -128,7 +128,7 @@ fi
 
 # 3. Stage src/os-mihomo/src/ contents
 echo "==> Staging files from $SOURCE_DIR/src"
-(cd "$SOURCE_DIR/src" && tar --exclude '.DS_Store' --exclude '._*' --exclude '*.xz' --exclude '*.gz' -cf - .) | (cd "$STAGE_DIR" && tar -xf -)
+(cd "$SOURCE_DIR/src" && tar --exclude '.DS_Store' --exclude '._*' --exclude '*.xz' --exclude '*.gz' --exclude '__pycache__' --exclude '*.pyc' -cf - .) | (cd "$STAGE_DIR" && tar -xf -)
 
 # 4. Install official verified Mihomo binary
 mkdir -p "$STAGE_DIR/usr/local/bin"

@@ -124,8 +124,67 @@ grep -q "function getModelNodes" "$GEN_CTRL" || {
 }
 echo "  [PASS] GeneralController overrides getModelNodes()"
 
-# Test 8: PHP 语法检查（有 php 时）
-echo "--> Test 8: PHP syntax..."
+# Test 8: v1.0.8 api-bind 方案守卫
+echo "--> Test 8: v1.0.8 api-bind guards..."
+# ① actions conf 含 [api-bind-apply] 且 %s 仅在 parameters 行
+grep -q "^\[api-bind-apply\]" "$ACTIONS" || {
+    echo "FAIL: actions_mihomo.conf missing [api-bind-apply]"; exit 1;
+}
+awk '
+    /^\[api-bind-apply\]/ { in_act = 1; next }
+    in_act && /^\[/ { in_act = 0 }
+    in_act && /^command:.*%s/ { print "FAIL: [api-bind-apply] command line contains %s"; exit 1 }
+    in_act && /^parameters:.*%s.*%s/ { has_params = 1 }
+    END {
+        if (!has_params) {
+            print "FAIL: [api-bind-apply] missing two %s placeholders in parameters"
+            exit 1
+        }
+    }
+' "$ACTIONS" || exit 1
+echo "  [PASS] actions_mihomo.conf contains [api-bind-apply] with parameters %s %s"
+
+# ② Mihomo.xml 含 api_bind/api_port、不含 lan_api
+MODEL_XML="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/models/OPNsense/Mihomo/Mihomo.xml"
+[ -f "$MODEL_XML" ] || { echo "FAIL: missing Mihomo.xml"; exit 1; }
+grep -q "<api_bind type=\"TextField\">" "$MODEL_XML" || {
+    echo "FAIL: Mihomo.xml missing api_bind TextField"; exit 1;
+}
+grep -q "<api_port type=\"IntegerField\">" "$MODEL_XML" || {
+    echo "FAIL: Mihomo.xml missing api_port IntegerField"; exit 1;
+}
+if grep -q "lan_api" "$MODEL_XML"; then
+    echo "FAIL: Mihomo.xml must not contain deprecated lan_api"; exit 1;
+fi
+echo "  [PASS] Mihomo.xml has api_bind/api_port and no lan_api"
+
+# ③ GeneralController 含 secret 有效值前置检查与 api-bind-apply 调用
+grep -q "getConfigSecret" "$GEN_CTRL" || {
+    echo "FAIL: GeneralController must check config.yaml secret value before binding non-loopback"; exit 1;
+}
+grep -q "configdpRun('mihomo api-bind-apply'" "$GEN_CTRL" || {
+    echo "FAIL: GeneralController must call configdpRun('mihomo api-bind-apply', ...)"; exit 1;
+}
+echo "  [PASS] GeneralController includes active secret check and api-bind-apply"
+
+# ④ index.volt 不含 ":9090" 字面量
+INDEX_VOLT="$VIEW_DIR/index.volt"
+[ -f "$INDEX_VOLT" ] || { echo "FAIL: missing index.volt"; exit 1; }
+if grep -q ":9090" "$INDEX_VOLT"; then
+    echo "FAIL: index.volt contains hardcoded :9090 literal"; exit 1;
+fi
+echo "  [PASS] index.volt has zero :9090 literals"
+
+# ⑤ setup_firewall.php 不含 port 9090
+FW_PHP="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/mihomo/setup_firewall.php"
+[ -f "$FW_PHP" ] || { echo "FAIL: missing setup_firewall.php"; exit 1; }
+if grep -q "9090" "$FW_PHP"; then
+    echo "FAIL: setup_firewall.php contains port 9090"; exit 1;
+fi
+echo "  [PASS] setup_firewall.php contains no port 9090"
+
+# Test 9: PHP 语法检查（有 php 时）
+echo "--> Test 9: PHP syntax..."
 if command -v php >/dev/null 2>&1; then
     for php_file in "$CTRL_DIR"/*.php "$CTRL_DIR"/Api/*.php; do
         php -l "$php_file" >/dev/null || { echo "FAIL: PHP syntax error in $php_file"; exit 1; }

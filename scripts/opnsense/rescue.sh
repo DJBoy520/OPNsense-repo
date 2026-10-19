@@ -12,6 +12,32 @@ ACTION="${1:-status}"
 YFLAG="${2:-}"
 HEV_CONF="/usr/local/etc/xray-proxy/hev-socks5-tunnel.yml"
 ANCHOR_FILE="/usr/local/etc/pf.anchors/xray-proxy"
+CONFIG_FILE="/usr/local/etc/mihomo/config.yaml"
+
+# external-controller 端口解析（§2.3）：解析失败按默认 9090 展示
+API_PORT=9090
+if [ -r "$CONFIG_FILE" ]; then
+    _api_raw="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+      /^external-controller:[[:space:]]*/ {
+          line = $0
+          sub(/^external-controller:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+#.*$/, "", line)
+          gsub(/[[:space:]]+$/, "", line)
+          gsub(/"/, "", line)
+          gsub(sq, "", line)
+          n = split(line, p, ":")
+          if (n == 2 && p[2] ~ /^[0-9]+$/ && (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+              print p[2]
+              found = 1
+          }
+          exit
+      }
+    ' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$_api_raw" ]; then
+        API_PORT="$_api_raw"
+    fi
+fi
 
 confirm() {
     [ "${YFLAG}" = "-y" ] && return 0
@@ -66,7 +92,7 @@ case "${ACTION}" in
         ;;
     status)
         echo "== 端口归属 =="
-        sockstat -4 -l | grep -E ':(53|1053|7891|9090|10808) ' || true
+        sockstat -l | grep -E ":(53|1053|7891|${API_PORT}|10808) " || true
         echo "== 隧道接口 =="
         ifconfig tun0 >/dev/null 2>&1 && echo "tun0 UP" || echo "tun0 DOWN"
         ifconfig tun_mihomo >/dev/null 2>&1 && echo "tun_mihomo UP" || echo "tun_mihomo 不存在（socks 模式正常）"

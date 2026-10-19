@@ -44,9 +44,6 @@ if ($mode === 'flush_rules') {
 if ($mode === 'apply_rules') {
     $rules = <<<EOF
 table <rfc1918> const { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
-# Protect local API: localhost only
-pass in quick on lo0 proto tcp from 127.0.0.1 to 127.0.0.1 port 9090 keep state
-block in quick proto tcp to 127.0.0.1 port 9090
 # Pass TUN interface traffic
 pass in quick on tun_mihomo all keep state
 pass out quick on tun_mihomo all keep state

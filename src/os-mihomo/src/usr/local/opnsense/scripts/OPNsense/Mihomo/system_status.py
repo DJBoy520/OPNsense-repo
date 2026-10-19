@@ -21,7 +21,8 @@ CONF_FILE = "/usr/local/etc/mihomo/config.yaml"
 TUN_DEVICE = "tun_mihomo"
 SOCKS_PORT = 7891
 DNS_PORT = 1053
-API_PORT = 9090
+FALLBACK_API_BIND = "127.0.0.1"
+FALLBACK_API_PORT = 9090
 
 
 def load_state():
@@ -76,7 +77,7 @@ def port_listening(port):
     """sockstat 无匹配时退出码也可能为 0，按输出中的 :port 判断。"""
     try:
         result = subprocess.run(
-            ["sockstat", "-4", "-l", "-p", str(port)],
+            ["sockstat", "-l", "-p", str(port)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=5,
@@ -85,6 +86,40 @@ def port_listening(port):
         return False
     text = result.stdout.decode(errors="replace")
     return re.search(r":%d(?:\s|$)" % port, text) is not None
+
+
+def read_api_addr():
+    """解析 config.yaml 的 external-controller（与 sub_lib.sh 同语义）。
+
+    0.0.0.0 归一化为 127.0.0.1（探测走本机回环）；缺失/损坏回退默认回环地址。
+    返回 (host, port)。
+    """
+    host = None
+    port = None
+    try:
+        with open(CONF_FILE, "r") as handle:
+            for line in handle:
+                match = re.match(r"^external-controller:\s*(.*)$", line.rstrip("\n"))
+                if not match:
+                    continue
+                value = re.sub(r"\s+#.*$", "", match.group(1)).strip()
+                value = value.strip("\"'")
+                parts = value.split(":")
+                if len(parts) == 2:
+                    candidate_host, candidate_port = parts
+                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", candidate_host) and candidate_port.isdigit():
+                        octets = [int(part) for part in candidate_host.split(".")]
+                        if all(0 <= octet <= 255 for octet in octets) and 1 <= int(candidate_port) <= 65535:
+                            host = candidate_host
+                            port = int(candidate_port)
+                break
+    except OSError:
+        pass
+    if host is None or port is None:
+        return FALLBACK_API_BIND, FALLBACK_API_PORT
+    if host == "0.0.0.0":
+        host = "127.0.0.1"
+    return host, port
 
 
 def tun_enabled():
@@ -122,6 +157,7 @@ def collect():
     state = load_state()
     pid = read_pid(state)
     tun_mode = tun_enabled()
+    api_bind, api_port = read_api_addr()
 
     if tun_mode:
         tun_status = "UP" if tun_up() else "DOWN"
@@ -134,7 +170,9 @@ def collect():
         "pid": pid,
         "memory": read_memory(pid),
         "tun_status": tun_status,
-        "api_status": "UP" if port_listening(API_PORT) else "DOWN",
+        "api_status": "UP" if port_listening(api_port) else "DOWN",
+        "api_bind": api_bind,
+        "api_port": api_port,
         "dns_status": "UP" if port_listening(DNS_PORT) else "DOWN",
         "proxy_status": "UP" if port_listening(SOCKS_PORT) else "DOWN",
         "socks_mode": not tun_mode,

@@ -50,6 +50,79 @@ class GeneralController extends ApiMutableModelControllerBase
     }
 
     /**
+     * 读取系统实际占用的端口（WebGUI 端口与 SSH 端口），用于端口 deny-list
+     */
+    private function getSystemPorts()
+    {
+        $ports = [22];
+        $config = null;
+        try {
+            $config = Config::getInstance()->object();
+        } catch (\Exception $e) {
+            $config = null;
+        }
+        if ($config === null && file_exists('/conf/config.xml')) {
+            $config = @simplexml_load_file('/conf/config.xml');
+        }
+
+        if ($config !== null && isset($config->system)) {
+            // SSH 端口（默认为 22）
+            if (isset($config->system->ssh) && isset($config->system->ssh->port)) {
+                $sshPort = trim((string)$config->system->ssh->port);
+                if ($sshPort !== '' && ctype_digit($sshPort)) {
+                    $ports = [(int)$sshPort];
+                }
+            }
+            // WebGUI 端口（空则按 protocol 80/443）
+            if (isset($config->system->webgui)) {
+                $wg = $config->system->webgui;
+                $wgPort = isset($wg->port) ? trim((string)$wg->port) : '';
+                if ($wgPort !== '' && ctype_digit($wgPort)) {
+                    $ports[] = (int)$wgPort;
+                } else {
+                    $proto = isset($wg->protocol) ? trim((string)$wg->protocol) : 'https';
+                    $ports[] = ($proto === 'http') ? 80 : 443;
+                }
+            } else {
+                $ports[] = 443;
+            }
+        } else {
+            $ports[] = 443;
+        }
+        return array_values(array_unique($ports));
+    }
+
+    /**
+     * 直接读取 /usr/local/etc/mihomo/config.yaml 中生效的 ^secret: 实际值
+     * 遵循 mihomo 核心实际行为：只认 config.yaml，不认 secret.key。空值或缺失返回空字符串。
+     */
+    private function getConfigSecret()
+    {
+        $configFile = '/usr/local/etc/mihomo/config.yaml';
+        if (!is_file($configFile) || !is_readable($configFile)) {
+            return '';
+        }
+        $lines = @file($configFile, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            return '';
+        }
+        foreach ($lines as $line) {
+            if (preg_match('/^secret:[[:space:]]*(.*)$/', $line, $matches)) {
+                $raw = trim($matches[1]);
+                if ($raw === '') {
+                    return '';
+                }
+                if (preg_match('/^(["\'])(.*)\1\s*(?:#.*)?$/', $raw, $qMatches)) {
+                    return trim($qMatches[2]);
+                }
+                $parts = explode('#', $raw, 2);
+                return trim($parts[0], " \t\n\r\0\x0B\"'");
+            }
+        }
+        return '';
+    }
+
+    /**
      * 覆盖基类 setAction，只接收并更新 mihomo.general 子树，防止跨节点篡改
      */
     public function setAction()
@@ -59,6 +132,73 @@ class GeneralController extends ApiMutableModelControllerBase
             $postData = $this->request->getPost(static::$internalModelName);
             if (!is_array($postData) || !isset($postData['general']) || !is_array($postData['general'])) {
                 return $result;
+            }
+
+            $general = $postData['general'];
+
+            // 1. filter_var(FILTER_VALIDATE_IP) 复核 bind
+            if (isset($general['api_bind'])) {
+                $bind = trim((string)$general['api_bind']);
+                if ($bind === '' || filter_var($bind, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+                    return [
+                        'result' => 'failed',
+                        'message' => 'API 绑定地址无效，必须为合法的 IPv4 单地址（如 127.0.0.1、0.0.0.0 或本机接口 IP）',
+                        'validations' => [
+                            'mihomo.general.api_bind' => '请输入合法的 IPv4 单地址',
+                        ],
+                    ];
+                }
+
+                // 3. bind != 127.0.0.1 时：解析 /usr/local/etc/mihomo/config.yaml 的 ^secret: 实际值
+                if ($bind !== '127.0.0.1') {
+                    $activeSecret = $this->getConfigSecret();
+                    if ($activeSecret === '') {
+                        return [
+                            'result' => 'failed',
+                            'message' => '绑定非回环地址前必须先配置有效的 API 密钥（mihomo 仅认 config.yaml 中的实际生效 secret）',
+                            'validations' => [
+                                'mihomo.general.api_bind' => '请先在下方配置并保存 API 密钥后再绑定非回环地址',
+                            ],
+                        ];
+                    }
+                }
+            }
+
+            // 2. port int 1024-65535 且不在 {1053,7890,7891}，且不等于系统 WebGUI 端口与 SSH 端口
+            if (isset($general['api_port'])) {
+                $portRaw = trim((string)$general['api_port']);
+                if ($portRaw === '' || !ctype_digit($portRaw)) {
+                    return [
+                        'result' => 'failed',
+                        'message' => 'API 端口必须为数字',
+                        'validations' => [
+                            'mihomo.general.api_port' => '请输入合法的端口号（1024-65535）',
+                        ],
+                    ];
+                }
+                $port = (int)$portRaw;
+                if ($port < 1024 || $port > 65535) {
+                    return [
+                        'result' => 'failed',
+                        'message' => 'API 端口超出合法范围（1024-65535）',
+                        'validations' => [
+                            'mihomo.general.api_port' => 'API 端口必须在 1024 到 65535 之间',
+                        ],
+                    ];
+                }
+
+                $denyPorts = [1053, 7890, 7891];
+                $systemPorts = $this->getSystemPorts();
+                $allDeny = array_merge($denyPorts, $systemPorts);
+                if (in_array($port, $allDeny, true)) {
+                    return [
+                        'result' => 'failed',
+                        'message' => "API 端口 {$port} 不可用：保留端口、插件内部端口（1053/7890/7891）或系统端口（WebGUI/SSH）已被占用",
+                        'validations' => [
+                            'mihomo.general.api_port' => "端口 {$port} 为受保护或已占用的系统端口，请更换其他端口",
+                        ],
+                    ];
+                }
             }
 
             Config::getInstance()->lock();
@@ -82,11 +222,32 @@ class GeneralController extends ApiMutableModelControllerBase
         if (empty($maskedSecret)) {
             $maskedSecret = 'NOT_CONFIGURED';
         }
-        if (isset($result['mihomo']['general'])) {
-            $result['mihomo']['general']['secret_masked'] = $maskedSecret;
+
+        $targetKey = isset($result['mihomo']['general']) ? 'mihomo' : 'general';
+        if ($targetKey === 'mihomo') {
+            $gen = &$result['mihomo']['general'];
         } else {
-            $result['general']['secret_masked'] = $maskedSecret;
+            $gen = &$result['general'];
         }
+
+        $gen['secret_masked'] = $maskedSecret;
+
+        // 提取并归一化展示用探测地址
+        $bind = isset($gen['api_bind']) ? (string)$gen['api_bind'] : '127.0.0.1';
+        $port = isset($gen['api_port']) ? (string)$gen['api_port'] : '9090';
+        if ($bind === '') {
+            $bind = '127.0.0.1';
+        }
+        if ($port === '') {
+            $port = '9090';
+        }
+
+        $probeBind = ($bind === '0.0.0.0') ? '127.0.0.1' : $bind;
+        $gen['probe_bind'] = $probeBind;
+        $gen['probe_port'] = $port;
+        $gen['probe_addr'] = $probeBind . ':' . $port;
+        $gen['api_addr'] = $bind . ':' . $port;
+
         return $result;
     }
 
@@ -96,17 +257,25 @@ class GeneralController extends ApiMutableModelControllerBase
             return ['result' => 'failed', 'status' => 'failed', 'message' => '仅接受 POST 请求'];
         }
 
-        // 先快照旧值：后续动作只按“实际变化”分发
+        // 先快照旧值：后续动作只按“实际变化”分发；同时供 apply 失败时模型回滚使用
         $model = $this->getModel();
         $old = [
+            'api_bind' => (string)$model->general->api_bind,
+            'api_port' => (string)$model->general->api_port,
             'transport_mode' => (string)$model->general->transport_mode,
             'lan_expose' => (string)$model->general->lan_expose,
             'lan_user' => (string)$model->general->lan_user,
             'enabled' => (string)$model->general->enabled,
         ];
+        if ($old['api_bind'] === '') {
+            $old['api_bind'] = '127.0.0.1';
+        }
+        if ($old['api_port'] === '') {
+            $old['api_port'] = '9090';
+        }
 
         try {
-            /* 26.7 基类标准保存：构造模型→校验→setActionHook→落盘 */
+            /* 26.7 基类标准保存：构造模型→校验→setActionHook→落盘（已包含 setAction 内前置门禁） */
             $saveResult = $this->setAction();
         } catch (\Exception $e) {
             return ['result' => 'failed', 'status' => 'failed', 'message' => '保存设置失败: ' . $e->getMessage()];
@@ -115,7 +284,7 @@ class GeneralController extends ApiMutableModelControllerBase
             return [
                 'result' => 'failed',
                 'status' => 'failed',
-                'message' => '保存设置失败',
+                'message' => isset($saveResult['message']) ? $saveResult['message'] : '保存设置失败',
                 'validations' => isset($saveResult['validations']) ? $saveResult['validations'] : [],
             ];
         }
@@ -123,20 +292,65 @@ class GeneralController extends ApiMutableModelControllerBase
         // 重新加载模型，以配置文件中的新值为准
         $model = new Mihomo();
         $new = [
+            'api_bind' => (string)$model->general->api_bind,
+            'api_port' => (string)$model->general->api_port,
             'transport_mode' => (string)$model->general->transport_mode,
             'lan_expose' => (string)$model->general->lan_expose,
             'lan_user' => (string)$model->general->lan_user,
             'enabled' => (string)$model->general->enabled,
         ];
+        if ($new['api_bind'] === '') {
+            $new['api_bind'] = '127.0.0.1';
+        }
+        if ($new['api_port'] === '') {
+            $new['api_port'] = '9090';
+        }
 
         $messages = [];
         $backend = new Backend();
 
-        // 1) LAN 暴露状态文件：只允许白名单字符，不合法回落 mihomo
+        // 0) apply-then-persist：调用 configd 执行 api-bind-apply
+        $applyOutput = trim((string)$backend->configdpRun('mihomo api-bind-apply', [
+            $new['api_bind'],
+            $new['api_port'],
+        ]));
+
+        // apply 失败 → 回滚模型 + 跳过 enabled=1 的 restart + 返回 failed 并附 stdout 摘要
+        if (stripos($applyOutput, 'OK: api bind') === false) {
+            try {
+                Config::getInstance()->lock();
+                $rollbackMdl = $this->getModel();
+                $rollbackMdl->setNodes([
+                    'general' => [
+                        'api_bind' => $old['api_bind'],
+                        'api_port' => $old['api_port'],
+                    ]
+                ]);
+                $this->save(false, true);
+            } catch (\Exception $e) {
+                // 容错处理
+            }
+
+            $summary = ($applyOutput !== '') ? $applyOutput : '未收到服务响应';
+            return [
+                'result' => 'failed',
+                'status' => 'failed',
+                'message' => '应用 API 绑定失败，配置已自动回滚: ' . $summary,
+            ];
+        }
+
+        $messages[] = 'api-bind-apply: ' . $applyOutput;
+
+        // 1) LAN 暴露与 API 绑定状态文件：写入 panel-state.env
         if (!preg_match('/^[A-Za-z0-9_.@-]{1,32}$/', $new['lan_user'])) {
             $new['lan_user'] = 'mihomo';
         }
-        $messages[] = $this->writePanelState($new['lan_expose'], $new['lan_user']);
+        $messages[] = $this->writePanelState(
+            $new['lan_expose'],
+            $new['lan_user'],
+            $new['api_bind'],
+            $new['api_port']
+        );
 
         // 2) 传输模式切换（先 filter reload 再挂 anchor；关闭时反过来，避免规则引用悬空）
         if ($old['transport_mode'] !== $new['transport_mode']) {
@@ -166,9 +380,9 @@ class GeneralController extends ApiMutableModelControllerBase
 
     /**
      * 写 /var/db/os-mihomo/panel-state.env（同目录 tmp + rename，0600）
-     * 值已过白名单校验，单引号包裹是安全的。
+     * 扩展记录 MIHOMO_API_BIND 与 MIHOMO_API_PORT，值已过白名单与格式校验。
      */
-    private function writePanelState($lanExpose, $lanUser)
+    private function writePanelState($lanExpose, $lanUser, $apiBind = '127.0.0.1', $apiPort = '9090')
     {
         $stateFile = '/var/db/os-mihomo/panel-state.env';
         $stateDir = dirname($stateFile);
@@ -188,7 +402,9 @@ class GeneralController extends ApiMutableModelControllerBase
 
         chmod($tmpFile, 0600);
         $content = "MIHOMO_LAN_EXPOSE='" . ($lanExpose === '1' ? '1' : '0') . "'\n"
-            . "MIHOMO_LAN_USER='" . $lanUser . "'\n";
+            . "MIHOMO_LAN_USER='" . $lanUser . "'\n"
+            . "MIHOMO_API_BIND='" . $apiBind . "'\n"
+            . "MIHOMO_API_PORT='" . $apiPort . "'\n";
         if (file_put_contents($tmpFile, $content, LOCK_EX) === false || !@rename($tmpFile, $stateFile)) {
             @unlink($tmpFile);
             return '写入面板状态失败: ' . $stateFile;

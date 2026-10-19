@@ -2,7 +2,10 @@
 set -eu
 
 # Mihomo fail-open watchdog (socks-core mode)
-# 探测对象：进程 / API(9090) / DNS(1053) / 传输层(tun 模式查 tun_mihomo，socks 模式查 7891 监听)
+# 探测对象：进程 / API（config.yaml 的 external-controller）/ DNS(1053) / 传输层
+# （tun 模式查 tun_mihomo，socks 模式查 7891 监听）
+# §2.6 控制面/数据面解耦：API 探测失败只告警并触发 api-bind reconcile，不再 fail-open；
+# 致命判据是数据面（socks 7891 / DNS 1053）。
 # 本模式不改 Unbound、不动主规则集；transport=transparent 时 fail-open 仅清空
 # mihomo-transport anchor 恢复直连（route-to 不再指向已停的 socks 端口），
 # DNS 由 AdGuardHome 的 fallback 上游自然回退，直连流量不受影响。
@@ -14,6 +17,8 @@ LOG_FILE="/var/log/mihomo_watchdog.log"
 CONFIG_FILE="/usr/local/etc/mihomo/config.yaml"
 SERVICE_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
 TRANSPORT_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
+API_BIND_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh"
+SUB_LIB_FILE="${MIHOMO_SUB_LIB:-/usr/local/etc/mihomo/sub/sub_lib.sh}"
 TRANSPORT_MODE_FILE="/var/db/os-mihomo/transport-mode"
 BIN="/usr/local/bin/mihomo"
 CONF_DIR="/usr/local/etc/mihomo"
@@ -56,6 +61,45 @@ transport_mode_now() {
 port_listening() {
     # $1 = port
     sockstat -4 -l -p "$1" 2>/dev/null | grep -q "$1" || sockstat -4 -l 2>/dev/null | grep -q "127.0.0.1:$1"
+}
+
+# external-controller 探测地址（§2.3）：复用 sub_lib.sh 解析，库缺失时本地同语义兜底
+api_addr_now() {
+    if [ -r "$SUB_LIB_FILE" ]; then
+        _addr="$( . "$SUB_LIB_FILE" 2>/dev/null; mihomo_lib_api_addr "$CONFIG_FILE" 2>/dev/null || true )"
+    else
+        _addr="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+          /^external-controller:[[:space:]]*/ {
+              line = $0
+              sub(/^external-controller:[[:space:]]*/, "", line)
+              sub(/[[:space:]]+#.*$/, "", line)
+              gsub(/[[:space:]]+$/, "", line)
+              gsub(/"/, "", line)
+              gsub(sq, "", line)
+              n = split(line, p, ":")
+              if (n == 2 && p[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+                  p[2] ~ /^[0-9]+$/ &&
+                  (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+                  print p[1], p[2]
+                  found = 1
+              }
+              exit
+          }
+        ' "$CONFIG_FILE" 2>/dev/null || true)"
+        if [ -z "$_addr" ]; then
+            _addr="127.0.0.1 9090"
+        else
+            _addr_host="${_addr% *}"
+            if [ "$_addr_host" = "0.0.0.0" ]; then
+                _addr="127.0.0.1 ${_addr#* }"
+            fi
+        fi
+    fi
+    case "$_addr" in
+        *' '*) printf '%s\n' "$_addr" ;;
+        *) printf '127.0.0.1 9090\n' ;;
+    esac
 }
 
 trigger_failopen() {
@@ -110,14 +154,18 @@ if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
     exit 1
 fi
 
-# 2. API health check (127.0.0.1:9090)
+# 2. API health check（地址由 config.yaml 的 external-controller 解析）
+# §2.6：API 不可达不再 trigger_failopen（会误杀数据面），只告警 + reconcile 修复绑定
+API_ADDR="$(api_addr_now)"
+API_HOST="${API_ADDR% *}"
+API_PORT="${API_ADDR#* }"
 API_OK=0
 if command -v curl >/dev/null 2>&1; then
-    if curl -s -m 3 --connect-timeout 2 http://127.0.0.1:9090/ >/dev/null 2>&1; then
+    if curl -s -m 3 --connect-timeout 2 "http://${API_HOST}:${API_PORT}/" >/dev/null 2>&1; then
         API_OK=1
     fi
 elif command -v nc >/dev/null 2>&1; then
-    if nc -z -w 2 127.0.0.1 9090 2>/dev/null; then
+    if nc -z -w 2 "$API_HOST" "$API_PORT" 2>/dev/null; then
         API_OK=1
     fi
 else
@@ -125,8 +173,10 @@ else
 fi
 
 if [ "$API_OK" -eq 0 ]; then
-    trigger_failopen "Mihomo local API (127.0.0.1:9090) is unresponsive"
-    exit 1
+    log "WARNING: Mihomo API (${API_HOST}:${API_PORT}) is unresponsive; service stays up (data plane authoritative), triggering api-bind reconcile."
+    if [ -x "$API_BIND_MGR" ]; then
+        "$API_BIND_MGR" reconcile >/dev/null 2>&1 || true
+    fi
 fi
 
 # 3. DNS listener check (127.0.0.1:1053) —— AdGuardHome 上游指向此端口，属关键依赖

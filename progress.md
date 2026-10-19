@@ -68,3 +68,19 @@
 **VM 回归全过**：getGeneral 顶层仅 general 键；控制器路径轮换 → "Sent SIGHUP" 校验 → 9090 新 200/旧 401 → 恢复 200；reveal GET 拒、数组拒；四页 200；订阅保存 ok；锁真机验证（nohup 活持有者→等 11s+；杀持有者→5s 轮询清陈旧锁→完成）；四处密钥一致；服务 RUNNING/PROXY；面板 200。
 
 **最终包 `output/os-mihomo-1.0.7.pkg` SHA256=6a682808bb67460267d0e8cb020f5c532fbc3ca3791137c56adabdcecf2c23d6**（1.0.6 移入 archive）。
+
+---
+
+## 2026-10-19 · v1.0.8：9090 地址/端口面板可配 + 零硬编码（三轮方案审计 + 双模型编码 + 主控验收）
+
+**需求演化**：用户最初要 LAN 网段白名单（PF 方案 v1/v2/v2.1，两轮审计 5 条 HIGH 后废弃）→ 用户裁定改为"绑定地址面板直配" → 追加"端口也可配 + 硬编码清零"。三轮方案审计（54 条发现、5 HIGH 全部吸收），方向本身三轮零挑战。
+
+**功能**：面板新增「API 绑定地址」（api_bind，默认 127.0.0.1，可填接口 IP/0.0.0.0）与「API 端口」（api_port，默认 9090，IntegerField 1024-65535）；lan_api 死字段移除。渲染 = 密钥轮换同款 sed 双文件 + SIGHUP（实测重建 listener 含绑定地址、0.0.0.0 为 tcp46 双栈）。**配置驱动探测**：22→33 处 9090 字面量清零（sub_lib mihomo_lib_api_addr 单一解析口径，0.0.0.0→127.0.0.1 归一化），消费点含 transport_manager 门禁/安装门禁/watchdog/status/运维脚本。
+
+**安全契约**：三层端口 deny-list（<1024、1053/7890/7891、动态 WebGUI/SSH 实际端口——防 root mihomo 重启竞速抢占 22/80/443 致双失联）；secret 有效值门禁（以 config.yaml 实际值为准而非 secret.key）；绑定非本机地址拒绝（防 API 整体起不来）；**控制面/数据面解耦**（API 探测失败不再杀进程——改为 reconcile+告警，fail-open 判据改为数据面 socks/DNS，防误杀连带 DNS 失效）；断言精确匹配+负向（旧监听必须消失）+有界轮询+回滚。
+
+**编码**：双模型并行（DeepSeek shell/基础设施 13 文件含 §2.6 解耦；Gemini PHP/面板/打包 8 文件含升级迁移）；门禁 14/14 首轮全绿；交叉审计 DeepSeek 给 PHP 包 11 条（修复步骤因 13.8M token 上下文卡死，主控接管亲审 diff 全部吸收——含 config.xml 迁移临时文件 0640 权限修复）；Gemini 审 shell 包通过。
+
+**VM 回归全过**：升级迁移（0.0.0.0:9090 自动导入模型）；三态切换（0.0.0.0→LAN IP→改端口 19090→还原）监听/认证/模板/panel-state/模型五处一致；deny-list（1053/443 拒）；127.0.0.1 拒连；watchdog 62s 无误杀；四页 200；**打包缺陷修复**：__pycache__ 混入包（staging 加 exclude + 主控清理）。
+
+**最终包 `output/os-mihomo-1.0.8.pkg` SHA256=9ddc4db250497ff46049de57b86c229e4e2af9025f9b3b58ef560105c5a3b8ab**。VM 现态：0.0.0.0:9090（用户原状态保持），五处一致，服务 RUNNING。

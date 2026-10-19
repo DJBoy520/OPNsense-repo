@@ -17,8 +17,6 @@ assert 'const ANCHOR_NAME = \'mihomo\';' in content, 'Missing ANCHOR_NAME const'
 assert 'apply_rules' in content, 'Missing apply_rules mode'
 assert 'flush_rules' in content, 'Missing flush_rules mode'
 assert 'table <rfc1918>' in content, 'Missing rfc1918 table definition'
-assert 'pass in quick on lo0 proto tcp from 127.0.0.1 to 127.0.0.1 port 9090' in content, 'Missing local API protection rule'
-assert 'block in quick proto tcp to 127.0.0.1 port 9090' in content, 'Missing block rule for non-local API access'
 print('  [PASS] setup_firewall.php contains all required PF isolation and security rules')
 "
 

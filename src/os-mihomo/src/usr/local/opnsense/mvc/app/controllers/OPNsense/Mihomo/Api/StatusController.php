@@ -45,7 +45,7 @@ class StatusController extends ApiControllerBase
         $rawVersion = trim($backend->configdRun('mihomo version'));
         $rawSystemStatus = trim($backend->configdRun('mihomo system-status'));
 
-        $pluginVersion = '1.0.7';
+        $pluginVersion = '1.0.8';
         $versionFile = '/usr/local/opnsense/version/mihomo';
         if (file_exists($versionFile)) {
             $versionData = json_decode(@file_get_contents($versionFile), true);

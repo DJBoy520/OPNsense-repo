@@ -112,6 +112,11 @@ VERSION_ENV="$ROOT_DIR/src/os-mihomo/build/mihomo-version.env"
 ROOT_BUILD="$ROOT_DIR/scripts/build.sh"
 
 grep -q 'port_listening 1053' "$WD_SH" || fail "watchdog missing DNS(1053) fallback check"
+# §2.6 控制面/数据面解耦：API 探测失败只告警 + api-bind reconcile，不得 trigger_failopen
+grep -q 'api_bind_manager' "$WD_SH" || fail "watchdog missing api-bind reconcile on API failure"
+if grep -q 'trigger_failopen "Mihomo local API' "$WD_SH"; then
+    fail "watchdog still fail-opens on API failure (control-plane must not kill data-plane)"
+fi
 grep -Fq 'setup_unbound' "$WD_SH" && fail "watchdog still touches Unbound"
 # v1.0.5 起允许 watchdog 仅操作 mihomo-transport anchor（fail-open 清空 + recover 重挂）：
 # 出现任何未锚定到 mihomo-transport 的 pfctl 调用仍视为违规

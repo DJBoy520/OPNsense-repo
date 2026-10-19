@@ -42,8 +42,8 @@
 
 <div class="content-box" style="padding-bottom: 1.5em;">
     <div class="col-xs-12">
-        <h2>{{ lang._('Mihomo - Dashboard API Secret (9090)') }}</h2>
-        <p class="text-muted">{{ lang._('Secret for the bundled dashboard (http://127.0.0.1:9090/ui/) and the external controller API.') }}</p>
+        <h2>{{ lang._('Mihomo - Dashboard & External Controller API') }} <span id="api_header_port" class="text-muted" style="font-size: 18px;"></span></h2>
+        <p class="text-muted" id="api_panel_desc">{{ lang._('API secret and connection parameters for the external controller and dashboards.') }}</p>
         <hr/>
     </div>
 
@@ -53,7 +53,17 @@
             <div>
                 <code id="api_secret_masked" style="font-size: 13px;">{{ lang._('Loading...') }}</code>
             </div>
-            <span class="help-block">{{ lang._('Use this secret to sign in to the dashboard at port 9090. Note: By default the external controller listens on 127.0.0.1 only; LAN access requires an SSH tunnel or waiting for future LAN API exposure support. Changes are applied to config.yaml, the subscription template and the sub env, then mihomo is hot-reloaded.') }}</span>
+            <span class="help-block" id="api_secret_help">{{ lang._('Use this secret to sign in to the dashboard and external controller API. Changes are applied to config.yaml, the subscription template and the sub env, then mihomo is hot-reloaded.') }}</span>
+        </div>
+        <div class="alert alert-info" id="api_dashboard_guide" style="margin-bottom: 15px;">
+            <strong><i class="fa fa-info-circle"></i> {{ lang._('Dashboard & Client Guide') }}:</strong>
+            <div id="api_guide_content" style="margin-top: 5px;">
+                <span>{{ lang._('Bundled UI') }}: <a id="api_bundled_link" href="#" target="_blank" rel="noopener noreferrer">http://<span class="api_disp_host">127.0.0.1</span>:<span class="api_disp_port">9090</span>/ui/</a></span><br/>
+                <span>{{ lang._('Metacubexd / External Client') }}: {{ lang._('Host') }}: <code>http://<span class="api_disp_host">127.0.0.1</span>:<span class="api_disp_port">9090</span></code>, {{ lang._('Secret') }}: {{ lang._('Click [Show Secret] to copy') }}</span>
+                <div id="api_wan_warn" class="text-warning" style="display: none; margin-top: 4px;">
+                    <i class="fa fa-exclamation-triangle"></i> {{ lang._('0.0.0.0 listens on all interfaces (IPv4+IPv6). Ensure external WAN firewall rules block unauthorized traffic; binding to LAN interface IP is strongly recommended.') }}
+                </div>
+            </div>
         </div>
         <button class="btn btn-default" id="btn_secret_reveal" type="button">
             <i class="fa fa-eye"></i> {{ lang._('Show Secret') }}
@@ -178,22 +188,41 @@ $(function () {
         });
     }
 
+    var currentApiBind = '127.0.0.1';
+    var currentApiPort = '9090';
+
+    function updateApiDisplay(bind, port) {
+        currentApiBind = bind || '127.0.0.1';
+        currentApiPort = port || '9090';
+        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : currentApiBind;
+        var fullAddr = dispHost + ':' + currentApiPort;
+        $('#api_header_port').text('(' + currentApiPort + ')');
+        $('.api_disp_host').text(dispHost);
+        $('.api_disp_port').text(currentApiPort);
+        $('#api_bundled_link').attr('href', 'http://' + fullAddr + '/ui/').text('http://' + fullAddr + '/ui/');
+        if (currentApiBind === '0.0.0.0') {
+            $('#api_wan_warn').show();
+        } else {
+            $('#api_wan_warn').hide();
+        }
+    }
+
     function loadSecretMasked() {
         ajaxGet('/api/mihomo/general/getGeneral', {}, function (data) {
-            var masked = '';
-            if (data && data.mihomo && data.mihomo.general) {
-                masked = data.mihomo.general.secret_masked || '';
-            } else if (data && data.general) {
-                masked = data.general.secret_masked || '';
-            }
+            var gen = (data && data.mihomo && data.mihomo.general) ? data.mihomo.general : ((data && data.general) ? data.general : {});
+            var masked = gen.secret_masked || '';
             $('#api_secret_masked').text(masked || 'NOT_CONFIGURED');
+            var bind = gen.api_bind || '127.0.0.1';
+            var port = gen.api_port || '9090';
+            updateApiDisplay(bind, port);
         });
     }
 
     function showSecretDialog(title, secret) {
         var $input = $('<input type="text" class="form-control" readonly style="font-family: Menlo, Monaco, Consolas, monospace;"/>').val(secret);
         var $wrap = $('<div></div>');
-        $('<p></p>').text('{{ lang._("Copy this secret to sign in to the dashboard at port 9090:") }}').appendTo($wrap);
+        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : currentApiBind;
+        $('<p></p>').text('{{ lang._("Use this secret to sign in to the dashboard / metacubexd at ") }}' + dispHost + ':' + currentApiPort + ':').appendTo($wrap);
         $input.appendTo($wrap);
         BootstrapDialog.show({
             type: BootstrapDialog.TYPE_INFO,
@@ -259,6 +288,7 @@ $(function () {
                 title: failed ? '{{ lang._("Error") }}' : '{{ lang._("Saved") }}',
                 message: $message
             });
+            loadSecretMasked();
         }, true, function (data) {
             $progress.removeClass('fa fa-spinner fa-pulse');
             $button.prop('disabled', false);

@@ -276,12 +276,21 @@ LAN_IP=$(
   '
 )
 
+# 面板访问提示动态化（external-controller 绑定/端口可配置；0.0.0.0 归一为回环）
+_API_ADDR="$(mihomo_lib_api_addr "$Conf_Dir/config.yaml" 2>/dev/null || true)"
+case "$_API_ADDR" in
+    *' '*) ;;
+    *) _API_ADDR="127.0.0.1 9090" ;;
+esac
+_API_HOST="${_API_ADDR%% *}"
+_API_PORT="${_API_ADDR##* }"
+
 # 如果还是取不到，就给一个兜底提示
 if [ -n "$LAN_IP" ]; then
-  echo "面板访问（API 仅监听 127.0.0.1，需 SSH 隧道）:"
-  echo "  ssh -L 9090:127.0.0.1:9090 root@${LAN_IP}  然后本机打开 http://127.0.0.1:9090/ui"
+  echo "面板访问（API 绑定 ${_API_HOST}:${_API_PORT}，非 LAN 地址时需 SSH 隧道）:"
+  echo "  ssh -L ${_API_PORT}:${_API_HOST}:${_API_PORT} root@${LAN_IP}  然后本机打开 http://${_API_HOST}:${_API_PORT}/ui"
 else
-  echo "面板访问：未能自动获取 LAN/OPT1 地址，请手动 SSH 隧道 -L 9090:127.0.0.1:9090"
+  echo "面板访问：未能自动获取 LAN/OPT1 地址，请手动 SSH 隧道 -L ${_API_PORT}:${_API_HOST}:${_API_PORT}"
 fi
 
 if [ -x "$SECRET_MANAGER" ]; then

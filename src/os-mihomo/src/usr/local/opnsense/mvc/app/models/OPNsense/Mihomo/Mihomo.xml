@@ -19,10 +19,19 @@
                     <silent>Silent</silent>
                 </OptionValues>
             </log_level>
-            <lan_api type="BooleanField">
-                <default>0</default>
+            <api_bind type="TextField">
+                <default>127.0.0.1</default>
                 <Required>Y</Required>
-            </lan_api>
+                <Mask>/^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/</Mask>
+                <ValidationMessage>请输入合法的 IPv4 地址（如 127.0.0.1、0.0.0.0 或本机接口 IP）</ValidationMessage>
+            </api_bind>
+            <api_port type="IntegerField">
+                <default>9090</default>
+                <Required>Y</Required>
+                <MinimumValue>1024</MinimumValue>
+                <MaximumValue>65535</MaximumValue>
+                <ValidationMessage>API 端口必须在 1024 到 65535 之间</ValidationMessage>
+            </api_port>
             <!-- proxy=仅本机 socks 7890/7891；transparent=hev tun0 + PF anchor 接管 LAN 流量 -->
             <transport_mode type="OptionField">
                 <default>proxy</default>

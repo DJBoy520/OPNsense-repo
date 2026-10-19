@@ -406,3 +406,46 @@ mihomo_lib_status_write() {
     chmod 0644 "$_tmp_status" 2>/dev/null || true
     mv -f "$_tmp_status" "$MIHOMO_STATUS_FILE"
 }
+
+# 解析 config.yaml 的 external-controller 为 "host port"（协议见 docs/DESIGN-lan-api.md v3.2）
+# 只接受 IPv4:port 形态；0.0.0.0 归一化为 127.0.0.1（探测走本机回环），
+# 解析失败回退 127.0.0.1 9090 并向 stderr 告警。输出用空格分隔两段。
+mihomo_lib_api_addr() {
+    _api_conf="${1:-/usr/local/etc/mihomo/config.yaml}"
+    _api_raw=""
+    if [ -r "$_api_conf" ]; then
+        _api_raw="$(awk '
+          BEGIN { sq = sprintf("%c", 39) }
+          /^external-controller:[[:space:]]*/ {
+              line = $0
+              sub(/^external-controller:[[:space:]]*/, "", line)
+              sub(/[[:space:]]+#.*$/, "", line)
+              gsub(/[[:space:]]+$/, "", line)
+              gsub(/"/, "", line)
+              gsub(sq, "", line)
+              n = split(line, p, ":")
+              if (n == 2 && p[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ &&
+                  p[2] ~ /^[0-9]+$/) {
+                  split(p[1], o, ".")
+                  if (o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255 &&
+                      (p[2] + 0) >= 1 && (p[2] + 0) <= 65535) {
+                      print p[1], p[2]
+                      found = 1
+                  }
+              }
+              exit
+          }
+        ' "$_api_conf" 2>/dev/null || true)"
+    fi
+    if [ -z "$_api_raw" ]; then
+        echo "警告：无法从 $_api_conf 解析 external-controller，回退 127.0.0.1 端口 9090" >&2
+        printf '%s %s\n' "127.0.0.1" "9090"
+        return 0
+    fi
+    _api_host="${_api_raw% *}"
+    _api_port="${_api_raw#* }"
+    if [ "$_api_host" = "0.0.0.0" ]; then
+        _api_host="127.0.0.1"
+    fi
+    printf '%s %s\n' "$_api_host" "$_api_port"
+}
