@@ -23,6 +23,10 @@
                     </td>
                 </tr>
                 <tr>
+                    <th>{{ lang._('Transport') }}</th>
+                    <td id="stat_transport">-</td>
+                </tr>
+                <tr>
                     <th>{{ lang._('Plugin Version') }}</th>
                     <td id="stat_plugin_version">-</td>
                 </tr>
@@ -95,15 +99,19 @@ $(function () {
 
             var $mode = $('#stat_mode');
             $mode.removeClass('label-default label-primary label-info');
-            if (data.mode === 'PROXY') {
-                $mode.addClass('label-primary').text('MODE: PROXY');
+            var state = (data.state || '').toUpperCase();
+            if (state === 'RUNNING') {
+                if (data.transport_mode === 'transparent') {
+                    $mode.addClass('label-info').text('MODE: TRANSPARENT');
+                } else {
+                    $mode.addClass('label-primary').text('MODE: PROXY');
+                }
             } else {
                 $mode.addClass('label-default').text('MODE: DIRECT');
             }
 
             var $stateDesc = $('#stat_state_desc');
             $stateDesc.removeClass('label-default label-success label-warning label-danger label-info');
-            var state = (data.state || '').toUpperCase();
             if (state === 'RUNNING') {
                 $stateDesc.addClass('label-success').html('<i class="fa fa-check-circle"></i> RUNNING');
             } else if (state === 'STARTING') {
@@ -121,12 +129,21 @@ $(function () {
             }
 
             var $tun = $('#stat_tun');
-            $tun.removeClass('label-default label-success label-danger');
+            $tun.removeClass('label-default label-success label-danger label-info');
             if (data.tun_status === 'UP') {
                 $tun.addClass('label-success').text('UP');
-            } else {
+            } else if (data.tun_status === 'DOWN') {
                 $tun.addClass('label-danger').text('DOWN');
+            } else {
+                $tun.addClass('label-default').text('SOCKS');
             }
+
+            var transportText = '-';
+            if (data.transport_mode) {
+                var kindText = data.tun_kind ? ' (' + data.tun_kind + ')' : '';
+                transportText = data.transport_mode.toUpperCase() + kindText;
+            }
+            $('#stat_transport').text(transportText);
 
             var $api = $('#stat_api');
             $api.removeClass('label-default label-success label-danger');

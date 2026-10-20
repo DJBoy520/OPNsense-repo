@@ -233,29 +233,7 @@ mihomo_lib_status_write "success" "$NODE_COUNT" "$CACHE_HASH" "订阅更新成�
 
 #################### 输出仪表盘信息 ####################
 sleep 1
-# 优先获取防火墙的 LAN，其次 OPT1，最后回退到私网地址
 LAN_IP=$(
-  /usr/local/bin/php -r '
-    require_once("/etc/inc/config.inc");
-    require_once("/etc/inc/interfaces.inc");
-
-    $candidates = array("lan", "opt1");
-
-    foreach ($candidates as $name) {
-        $if = get_real_interface($name);
-        if (!empty($if)) {
-            $ip = get_interface_ip($if);
-            if (!empty($ip)) {
-                echo $ip;
-                exit;
-            }
-        }
-    }
-  ' 2>/dev/null
-)
-
-# 如果接口函数没有取到，再回退到本机私网地址
-[ -n "$LAN_IP" ] || LAN_IP=$(
   ifconfig 2>/dev/null | awk '
     /^[[:alnum:]_.:-]+:/ {
       iface=$1

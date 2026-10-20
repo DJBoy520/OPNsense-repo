@@ -62,7 +62,7 @@ if [ -z "$VERSION" ] && [ -f "$MAKEFILE" ]; then
 fi
 
 PKG_NAME="${PKG_NAME:-os-mihomo}"
-VERSION="${VERSION:-1.0.8}"
+VERSION="${VERSION:-1.0.9}"
 ORIGIN="${ORIGIN:-opnsense/$PKG_NAME}"
 COMMENT="${COMMENT:-Mihomo proxy integration for OPNsense}"
 MAINTAINER="${MAINTAINER:-https://github.com/Opnwall/}"

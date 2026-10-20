@@ -44,11 +44,12 @@ class RulesController extends ApiControllerBase
 {
     const VALIDATOR = '/usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php';
     const RULES_FILE = '/usr/local/etc/mihomo/custom-rules.txt';
+    const CONFIG_FILE = '/usr/local/etc/mihomo/config.yaml';
     const MAX_LINES = 200;
     const MAX_BYTES = 32768;
 
     /**
-     * 返回当前规则、允许的目标集合与上限（目标集合由校验器从模板解析，失败时回退）
+     * 返回当前规则、允许的类型列表、允许的目标集合与上限（类型与目标均由校验器解析，失败时回退）
      */
     public function getAction()
     {
@@ -56,6 +57,7 @@ class RulesController extends ApiControllerBase
         return [
             'status' => 'ok',
             'content' => (string)$model->customRules->content,
+            'ruleTypes' => $this->fetchRuleTypes(),
             'targets' => $this->fetchTargets(),
             'limits' => [
                 'maxLines' => self::MAX_LINES,
@@ -219,5 +221,223 @@ class RulesController extends ApiControllerBase
             return substr($text, 0, $limit) . '...';
         }
         return $text;
+    }
+
+    /**
+     * 读取生效的分流规则（调用 mihomo external-controller /rules 接口）
+     *
+     * 遵循契约：
+     * - 服务端解析 /usr/local/etc/mihomo/config.yaml：
+     *   ^external-controller: 的 host:port（0.0.0.0 归一化为 127.0.0.1）
+     *   ^secret: 实际值（非空才带 Authorization: Bearer 头）
+     * - curl 调 http://<host>:<port>/rules（-m 3 超时；所有拼参 escapeshellarg）
+     * - 为防止进程列表泄漏 secret，通过 0600 临时 curl 配置文件传 header
+     * - 非 200/失败/超时 → 返回 {status:"ok", reachable:false, rules:[], note:"mihomo API 不可达"}，绝不抛错
+     * - 成功 → {status:"ok", reachable:true, rules:<mihomo 返回的 rules 数组透传>}
+     * - secret 绝不能出现在响应里
+     */
+    public function getEffectiveRulesAction()
+    {
+        $addr = $this->readApiAddr();
+        if ($addr === null) {
+            return [
+                'status' => 'ok',
+                'reachable' => false,
+                'rules' => [],
+                'note' => 'mihomo API 不可达',
+            ];
+        }
+
+        $host = $addr['host'];
+        $port = $addr['port'];
+        $secret = $this->readConfigSecret();
+
+        $url = 'http://' . $host . ':' . $port . '/rules';
+        $cmd = '/usr/local/bin/curl -s -m 3 --connect-timeout 2';
+
+        $cfgFile = null;
+        if ($secret !== '') {
+            $cfgFile = tempnam(sys_get_temp_dir(), 'mihomo-curl-');
+            if ($cfgFile !== false) {
+                chmod($cfgFile, 0600);
+                // curl 配置文件格式：header = "..."，防止 secret 进入命令行 argv
+                $cfgContent = 'header = "Authorization: Bearer ' . str_replace(['\\', '"'], ['\\\\', '\\"'], $secret) . "\"\n";
+                if (file_put_contents($cfgFile, $cfgContent) !== false) {
+                    $cmd .= ' -K ' . escapeshellarg($cfgFile);
+                } else {
+                    @unlink($cfgFile);
+                    $cfgFile = null;
+                }
+            }
+        }
+
+        $cmd .= ' -w ' . escapeshellarg("\n%{http_code}") . ' ' . escapeshellarg($url) . ' 2>/dev/null';
+
+        $output = shell_exec($cmd);
+        if ($cfgFile !== null) {
+            @unlink($cfgFile);
+        }
+
+        if (!is_string($output) || $output === '') {
+            return [
+                'status' => 'ok',
+                'reachable' => false,
+                'rules' => [],
+                'note' => 'mihomo API 不可达',
+            ];
+        }
+
+        $lastNewline = strrpos($output, "\n");
+        if ($lastNewline === false) {
+            return [
+                'status' => 'ok',
+                'reachable' => false,
+                'rules' => [],
+                'note' => 'mihomo API 不可达',
+            ];
+        }
+
+        $body = substr($output, 0, $lastNewline);
+        $httpCode = trim(substr($output, $lastNewline + 1));
+
+        if ($httpCode !== '200') {
+            return [
+                'status' => 'ok',
+                'reachable' => false,
+                'rules' => [],
+                'note' => 'mihomo API 不可达',
+            ];
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded) || !isset($decoded['rules']) || !is_array($decoded['rules'])) {
+            return [
+                'status' => 'ok',
+                'reachable' => false,
+                'rules' => [],
+                'note' => 'mihomo API 不可达',
+            ];
+        }
+
+        return [
+            'status' => 'ok',
+            'reachable' => true,
+            'rules' => $decoded['rules'],
+        ];
+    }
+
+    /**
+     * 解析 config.yaml 中的 external-controller，0.0.0.0 归一化为 127.0.0.1
+     * 解析失败或损坏时返回 null（视为不可达分支，不自动回退端口）
+     */
+    private function readApiAddr()
+    {
+        if (!is_file(self::CONFIG_FILE) || !is_readable(self::CONFIG_FILE)) {
+            return null;
+        }
+
+        $lines = @file(self::CONFIG_FILE, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            return null;
+        }
+
+        foreach ($lines as $line) {
+            if (preg_match('/^external-controller:\s*(.*)$/', $line, $matches)) {
+                $raw = trim($matches[1]);
+                $comment = strpos($raw, ' #');
+                if ($comment !== false) {
+                    $raw = rtrim(substr($raw, 0, $comment));
+                }
+                $val = trim($raw, " \t\n\r\0\x0B\"'");
+                $parts = explode(':', $val);
+                if (count($parts) === 2) {
+                    $h = $parts[0];
+                    $p = $parts[1];
+                    if (filter_var($h, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false && ctype_digit($p)) {
+                        $pInt = (int)$p;
+                        if ($pInt >= 1 && $pInt <= 65535) {
+                            if ($h === '0.0.0.0') {
+                                $h = '127.0.0.1';
+                            }
+                            return ['host' => $h, 'port' => $pInt];
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 直接读取 /usr/local/etc/mihomo/config.yaml 中生效的 ^secret: 实际值
+     * 缺失或空值返回空字符串。注释只在带有前置空格的 ' #' 处剥离，与 YAML 规范保持一致。
+     */
+    private function readConfigSecret()
+    {
+        if (!is_file(self::CONFIG_FILE) || !is_readable(self::CONFIG_FILE)) {
+            return '';
+        }
+
+        $lines = @file(self::CONFIG_FILE, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            return '';
+        }
+
+        foreach ($lines as $line) {
+            if (preg_match('/^secret:[[:space:]]*(.*)$/', $line, $matches)) {
+                $raw = trim($matches[1]);
+                if ($raw === '') {
+                    return '';
+                }
+                if (preg_match('/^(["\'])(.*)\1\s*(?:#.*)?$/', $raw, $qMatches)) {
+                    return trim($qMatches[2]);
+                }
+                $commentPos = strpos($raw, ' #');
+                if ($commentPos !== false) {
+                    $raw = substr($raw, 0, $commentPos);
+                }
+                return trim($raw, " \t\n\r\0\x0B\"'");
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * 从校验器 custom_rules_validate.php 动态提取 RULE_TYPES 常量，保证单一真源
+     */
+    private function fetchRuleTypes()
+    {
+        $defaultTypes = [
+            'DOMAIN',
+            'DOMAIN-SUFFIX',
+            'DOMAIN-KEYWORD',
+            'IP-CIDR',
+            'IP-CIDR6',
+            'GEOIP',
+            'GEOSITE',
+            'DST-PORT',
+        ];
+
+        if (!is_file(self::VALIDATOR) || !is_readable(self::VALIDATOR)) {
+            return $defaultTypes;
+        }
+
+        $content = @file_get_contents(self::VALIDATOR);
+        if ($content === false) {
+            return $defaultTypes;
+        }
+
+        if (preg_match('/const\s+RULE_TYPES\s*=\s*\[(.*?)\];/s', $content, $matches)) {
+            if (preg_match_all('/[\'"]([A-Za-z0-9_-]+)[\'"]/', $matches[1], $itemMatches)) {
+                if (!empty($itemMatches[1])) {
+                    return array_values(array_unique($itemMatches[1]));
+                }
+            }
+        }
+
+        return $defaultTypes;
     }
 }

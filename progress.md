@@ -84,3 +84,15 @@
 **VM 回归全过**：升级迁移（0.0.0.0:9090 自动导入模型）；三态切换（0.0.0.0→LAN IP→改端口 19090→还原）监听/认证/模板/panel-state/模型五处一致；deny-list（1053/443 拒）；127.0.0.1 拒连；watchdog 62s 无误杀；四页 200；**打包缺陷修复**：__pycache__ 混入包（staging 加 exclude + 主控清理）。
 
 **最终包 `output/os-mihomo-1.0.8.pkg` SHA256=9ddc4db250497ff46049de57b86c229e4e2af9025f9b3b58ef560105c5a3b8ab**。VM 现态：0.0.0.0:9090（用户原状态保持），五处一致，服务 RUNNING。
+
+## 2026-10-20 · v1.0.9：状态页三态显示 + 规则/日志页重做 + sub.sh 修 Fatal（4×Gemini 编码 + 4×DeepSeek 审计 + 主控验收）
+
+**特性**：①状态页传输层显示语义修正（MODE 徽章反映 transport-mode；TUN 徽章三态 SOCKS/hev-TUN/mihomo-TUN，SOCKS 态不再误显红色 DOWN；system_status.py 新增 transport_mode/tun_kind 字段，读 /var/db/os-mihomo/transport-mode + 探测 tun0 UP|RUNNING）。②规则页表格化编辑器（类型/值/目标下拉 + no-resolve + 注释行保真 + 逐行内联报错 + 源码模式切换；类型清单由 RulesController fetchRuleTypes 从 custom_rules_validate.php 单一真源提取）+ 当前生效规则只读视图（getEffectiveRulesAction：config.yaml 解析 bind/port/secret，0600 临时 curl 配置文件传 Bearer 头防 argv 泄漏，非 200 一律不可达分支）。③日志页增量实时流（getLogsAction cursor 字节游标直读 /var/log/mihomo.log：半行等待/轮转重置/增量超 256KB 置 truncated；logfmt 结构化 time/level/msg 全字段脱敏；前端 2s 轮询 + 指数退避 10s 上限 + 暂停/清屏/下载/自动滚动/DOM 上限 2000 行；全 .text() 渲染零 XSS 面）。④sub.sh 移除必 Fatal 的 php -r 段（26.7 无 /etc/inc/，26.7 上每次 6h cron 必刷 Fatal；ifconfig awk 兜底转正，合成算法零触碰）。
+
+**流程**：dynamic-workflow dwfrun-a944a34a（前身 dwfrun-74a33210 因会话中断 + 守卫规格错误被 Amend 取代——守卫口径从裸 9090 修正为连接形态 127.0.0.1:9090，与 test_api_bind.sh 既有口径一致；HEAD 裸 9090 共 14 行全为拆分式回退默认值属设计内）。四路 Gemini 并行编码（文件集互不相交）→ 18 项测试门禁首次全绿 → DeepSeek 四路审计（rules 8 条/logs 6 条打回 → Gemini 修复 → 复审全过）→ 终局复跑全绿。主控终审：全量 diff 亲读 + 18/18 测试复跑 + VM php -l 前置门禁。
+
+**VM 回归（192.168.30.159）**：三页 200 + 新特性标记全中；getMihomoStatus 返回 transport_mode=transparent/tun_kind=hev-tun/tun_status=UP；getEffectiveRules reachable=true 20 条规则且 secret 零泄漏；日志游标二连击（首拉 100 条 cursor=412766，同游标二拉 0 条）；sub-update exit=0 且 PHP_errors.log delta=0（修复生效）；watchdog 65s PID 稳定；0.0.0.0:9090 经 pkg add -f 保留（reconcile）。
+
+**发现项（未修，已记录）**：①pkg add -f 会重置 /var/db/os-mihomo/transport-mode 为 proxy，而 UI 重存同值（模型仍 transparent）因变更检测 old≠new 不触发 transport-enable——升级后需 proxy→transparent 往返一次；②service_manager transport_name() 恒显 SOCKS（状态消息层，徽章已修）；③sub.sh 面板提示在 0.0.0.0 绑定时显示归一化的 127.0.0.1（v1.0.8 既有动态提示）。
+
+**最终包 `output/os-mihomo-1.0.9.pkg` SHA256=0f84f54a08882246e874d6802e07fbb77aceb6c89776db32f6bc01ec7019e710**（378 文件；1.0.8 旧包移 output/archive/）。VM 现态：0.0.0.0:9090 + transparent 全链，服务 RUNNING。

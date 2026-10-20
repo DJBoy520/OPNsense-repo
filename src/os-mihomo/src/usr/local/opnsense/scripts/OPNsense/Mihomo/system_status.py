@@ -17,8 +17,10 @@ STATE_RUN_FILE = "/var/run/mihomo_state.json"
 STATE_DB_FILE = "/var/db/os-mihomo/state.json"
 PID_FILE = "/var/run/mihomo.pid"
 CONF_FILE = "/usr/local/etc/mihomo/config.yaml"
+TRANSPORT_MODE_FILE = "/var/db/os-mihomo/transport-mode"
 
 TUN_DEVICE = "tun_mihomo"
+HEV_TUN_DEVICE = "tun0"
 SOCKS_PORT = 7891
 DNS_PORT = 1053
 FALLBACK_API_BIND = "127.0.0.1"
@@ -153,16 +155,56 @@ def tun_up():
         return False
 
 
+def read_transport_mode():
+    """读取 transport 模式：文件内容 strip 后等于 transparent 才是 transparent，其余均为 proxy。"""
+    try:
+        if os.path.exists(TRANSPORT_MODE_FILE):
+            with open(TRANSPORT_MODE_FILE, "r") as handle:
+                content = handle.read().strip()
+                if content == "transparent":
+                    return "transparent"
+    except OSError:
+        pass
+    return "proxy"
+
+
+def hev_tun_up():
+    """探测 tun0：ifconfig tun0 首行 flags 须同时含 UP 与 RUNNING 才算 UP。"""
+    try:
+        result = subprocess.run(
+            ["ifconfig", HEV_TUN_DEVICE],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        first_line = result.stdout.decode(errors="replace").splitlines()[0] if result.stdout else ""
+        match = re.search(r"flags=\d+<([^>]+)>", first_line)
+        if match:
+            flags = match.group(1).split(",")
+            return "UP" in flags and "RUNNING" in flags
+    except (OSError, subprocess.SubprocessError, IndexError):
+        pass
+    return False
+
+
 def collect():
     state = load_state()
     pid = read_pid(state)
     tun_mode = tun_enabled()
+    transport_mode = read_transport_mode()
     api_bind, api_port = read_api_addr()
 
     if tun_mode:
         tun_status = "UP" if tun_up() else "DOWN"
+        tun_kind = "mihomo-tun"
+    elif transport_mode == "transparent":
+        tun_status = "UP" if hev_tun_up() else "DOWN"
+        tun_kind = "hev-tun"
     else:
         tun_status = "SOCKS"
+        tun_kind = "none"
 
     return {
         "state": state.get("state", "STOPPED"),
@@ -170,6 +212,8 @@ def collect():
         "pid": pid,
         "memory": read_memory(pid),
         "tun_status": tun_status,
+        "tun_kind": tun_kind,
+        "transport_mode": transport_mode,
         "api_status": "UP" if port_listening(api_port) else "DOWN",
         "api_bind": api_bind,
         "api_port": api_port,
