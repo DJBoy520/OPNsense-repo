@@ -3,6 +3,8 @@
 > 文档编号：ARCH-BL-001  
 > 审计日期：2026-08-31  
 > 状态：基线锁定  
+>
+> **v1.0.9 注**：mihomo 自带 TUN 在 FreeBSD 不可用（实测 `configure tun interface: invalid argument`），v1.0.5 起透明代理由 hev-socks5-tunnel（tun0）+ PF anchor `mihomo-transport`（route-to）承担；本文 TUN 拓扑保留作历史基线记录。
 
 ---
 
@@ -29,7 +31,7 @@
 |                                │ 5. Userspace TUN (gVisor Stack)              |
 |                                ▼                                              |
 |                       [ Mihomo Core Process ]                                 |
-|                        (API: 127.0.0.1:9090)                                  |
+|                    (API: <bind>:<port> 默认 127.0.0.1:9090)                   |
 |                                │                                              |
 |                 ┌──────────────┴──────────────┐                               |
 |                 ▼                             ▼                               |
