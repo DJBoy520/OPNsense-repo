@@ -96,3 +96,5 @@
 **发现项（未修，已记录）**：①pkg add -f 会重置 /var/db/os-mihomo/transport-mode 为 proxy，而 UI 重存同值（模型仍 transparent）因变更检测 old≠new 不触发 transport-enable——升级后需 proxy→transparent 往返一次；②service_manager transport_name() 恒显 SOCKS（状态消息层，徽章已修）；③sub.sh 面板提示在 0.0.0.0 绑定时显示归一化的 127.0.0.1（v1.0.8 既有动态提示）。
 
 **最终包 `output/os-mihomo-1.0.9.pkg` SHA256=0f84f54a08882246e874d6802e07fbb77aceb6c89776db32f6bc01ec7019e710**（378 文件；1.0.8 旧包移 output/archive/）。VM 现态：0.0.0.0:9090 + transparent 全链，服务 RUNNING。
+
+**工具链备忘（AMR 本会话未加载，先记档）**：①WebGUI curl 脚本化登录时 CSRF 隐藏域字段名可能含连字符（如 `wUXLKAP2uZI1FlAmEG6-Jg`），提取正则必须 `[A-Za-z0-9-]\{16,\}`——旧字母数字模式取到空名、POST 缺 token 得 403，易误判为 45s 登录限流。②MetacubeXD 等外置面板的后端地址必须填 `http://<ip>:9090`（不带 `/ui/` 尾缀）——`/ui/` 是 mihomo 内嵌静态页路由，拼进后端地址会 404 报"后端无法连接"。
