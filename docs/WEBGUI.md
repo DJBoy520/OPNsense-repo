@@ -120,7 +120,7 @@ src/usr/local/opnsense/
 
 ---
 
-## 十四、1.3.0 后界面精简与收敛（2026-10-24）
+## 十四、1.4.0 界面精简与收敛（2026-10-24）
 
 - **移除「运行状态」独立页**：`status.volt` 与页面级 `StatusController.php` 下线，`Menu.xml` 去掉该项；诊断详情（Git 提交 / 最近状态消息 / 原始状态输出）不再在界面展示，需要时直接读 `/api/mihomo/status/getMihomoStatus` 或状态文件。
 - **概览改为三卡仪表盘**：服务状态（7 态呼吸灯 + 接入方式徽章 + 开机自启 + 内核模式下拉与「应用」+ 启停/重启/重载）、运行指标（运行时长 / 内存 / PID / TUN / 控制 API / 插件·内核版本）、订阅资源。轮询统一走 `/api/mihomo/status/getMihomoStatus`（5 秒，仅概览 Tab 可见时发请求），不再调用 `/api/mihomo/service/status`。
@@ -133,7 +133,7 @@ src/usr/local/opnsense/
 
 ---
 
-## 十六、分流规则页重构（2026-10-24 晚）
+## 十六、1.4.0 分流规则页重构（2026-10-24 晚）
 
 - **拆为 2 个 Tab**（与常规设置页同一套 `nav nav-tabs` + hash 绑定）：「自定义规则」编辑器 / 「规则查询」。整页高度从 1480px 降到 778px，编辑器与查询各自一屏。
 - **删除冗余信息层**：「允许的规则类型」code 行（类型下拉里已有）、「允许的目标策略」整条横向滚动 chips 与 `实时/离线` 徽章（目标只在行内选择器里选）、「打开策略组」跳转按钮、两条 help-block。`loadLiveGroups()` 保留，只是不再展示，仍为行内选择器提供实时组名与当前节点。
@@ -144,7 +144,7 @@ src/usr/local/opnsense/
 
 ---
 
-## 十五、1.3.0 后第二轮精简（2026-10-24 晚）
+## 十五、1.4.0 第二轮精简（2026-10-24 晚）
 
 - **Tab 从 4 个收敛到 3 个**：「面板与 API」并入「基本设置」（运行参数表单下方新增一张卡，三行 kv：内置面板 / 控制 API / 认证密钥），原「客户端接入指南」整块删除（与上方信息重复）；`#tab_api` 与 `.api_disp_*`/`.api_link_preview` 一并移除，`api_bind_badge` 改为端点行内的「当前监听」小徽章。
 - **订阅地址不再打码**：`/api/mihomo/subscription/get|set` 新增明文 `url` 字段，界面直接回填到输入框可编辑；`url_masked` 保留兼容。注意 `Mvc\Response` 会对 API 输出做 `htmlspecialchars`，前端用 `mhFromEntities()` 还原实体，否则地址里会出现 `&amp;`；保存回写仍是单层转义（已实测 `/conf/config.xml` 不产生 `&amp;amp;`）。
