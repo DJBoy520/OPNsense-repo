@@ -64,4 +64,20 @@ grep -qF '[ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh 
     || fail "+POST_INSTALL Step4 missing absolute transport_manager guard"
 echo "  [PASS] guard path absolute."
 
+# 7. 每次安装初始化必须强制轮换 API secret（用户策略：16 位大小写数字，
+#    实现于 secret_manager.sh generate；这里钉住 POST_INSTALL 的无条件调用）
+echo "--> Test 7: POST_INSTALL rotates API secret on every install..."
+grep -qF '每次安装初始化强制轮换' "$POST_INSTALL" \
+    || fail "+POST_INSTALL missing mandatory secret rotation marker comment"
+grep -qF 'secret_manager.sh generate' "$POST_INSTALL" \
+    || fail "+POST_INSTALL does not call secret_manager.sh generate"
+if grep -qF '[ ! -s /usr/local/etc/mihomo/secret.key ]' "$POST_INSTALL"; then
+    fail "+POST_INSTALL still guards generation on missing secret.key (rotation must be unconditional)"
+fi
+# 轮换必须联动 authentication 口令（SOCKS 凭证与 API secret 同值）
+SECRET_MGR="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh"
+grep -q 'MIHOMO_ROTATE_AUTH_PASS' "$SECRET_MGR" \
+    || fail "secret rotation does not sync the authentication block password"
+echo "  [PASS] unconditional secret rotation + authentication sync asserted."
+
 echo "===> All uninstall hygiene gate checks PASSED."

@@ -49,19 +49,20 @@ chmod 0755 /usr/local/etc/mihomo/sub/sub.sh /usr/bin/mihomo_sub /usr/local/etc/r
 chmod 0755 /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/atomic_config_updater.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/watchdog.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_apply.sh /usr/local/opnsense/scripts/OPNsense/Mihomo/subscription_env_writer.php /usr/local/opnsense/scripts/OPNsense/Mihomo/custom_rules_validate.php /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php /usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh 2>/dev/null || true
 chmod 0644 /usr/local/etc/mihomo/pf-transport.conf /usr/local/etc/mihomo/config.yaml.sample /usr/local/etc/mihomo/sub/env.sample /usr/local/etc/mihomo/hev.yaml.sample /usr/local/etc/mihomo/sub/sub_lib.sh 2>/dev/null || true
 
-# ---- Step 2: secret 仅在 secret.key 缺失/为空时生成（升级保留原 secret） ----
-if [ ! -s /usr/local/etc/mihomo/secret.key ]; then
-    if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
-        /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh generate >/dev/null 2>&1 || true
-    fi
+# ---- Step 2: 每次安装初始化强制轮换 API secret（16 位，必含大写/小写/数字） ----
+# 轮换联动 secret.key、config.yaml 的 secret 与 authentication 口令、订阅模板、sub/env。
+# 旧「升级保留原 secret」行为按用户要求废除：每次安装完成后都是新 secret，
+# UI/外部 API 客户端需用新值重新登录（面板 masked 页可查看掩码）。
+if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
+    /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh generate > /dev/null 2>&1 || echo "WARNING: secret rotation failed; previous secret kept." >&2
 fi
-# 强制 secret apply：若 config.yaml 的 secret 为空且 secret.key 非空，同步写入防免密暴露
+# 兜底：config.yaml 缺 secret 行而 secret.key 有值时强制写入（防免密暴露）
 if [ -f /usr/local/etc/mihomo/config.yaml ] && [ -s /usr/local/etc/mihomo/secret.key ]; then
     _cfg_sec=$(sed -n "s/^secret:[[:space:]]*[\"'\'' ]*\([^\"'\'' #]*\).*/\1/p" /usr/local/etc/mihomo/config.yaml 2>/dev/null | head -n 1)
     if [ -z "$_cfg_sec" ]; then
         if [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh ]; then
             _b64=$(base64 /usr/local/etc/mihomo/secret.key | tr -d '\n')
-            /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh set "b64:$_b64" >/dev/null 2>&1 || true
+            /usr/local/opnsense/scripts/OPNsense/Mihomo/secret_manager.sh set "b64:$_b64" > /dev/null 2>&1 || true
         fi
     fi
 fi

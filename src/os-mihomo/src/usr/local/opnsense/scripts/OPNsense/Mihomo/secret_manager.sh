@@ -12,19 +12,20 @@ ENV_FILE="${MIHOMO_ENV_FILE:-/usr/local/etc/mihomo/sub/env}"
 MIHOMO_LOCK_DIR="${MIHOMO_LOCK_DIR:-/var/run/mihomo-sub.lock}"
 LOCK_HELD=0
 
+# 安装初始化轮换用密钥策略：16 字符，字符集 [A-Za-z0-9]，且保证至少各含
+# 一个大写字母、小写字母与数字。不含特殊字符，保证 sed 替换、YAML 双引号、
+# env 单引号三种落地语境均无需转义（与 is_safe_custom_secret 白名单兼容）。
 generate_secret() {
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32
-    elif [ -r /dev/urandom ]; then
-        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
-    elif command -v uuidgen >/dev/null 2>&1; then
-        u1="$(uuidgen | tr -d '-')"
-        u2="$(uuidgen | tr -d '-')"
-        printf "%s%s" "$u1" "$u2"
-    else
-        echo "error: no secure CSPRNG available" >&2
-        exit 1
-    fi
+    _pw=""
+    while :; do
+        _pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
+        [ "${#_pw}" -eq 16 ] || continue
+        printf '%s' "$_pw" | grep -q '[A-Z]' || continue
+        printf '%s' "$_pw" | grep -q '[a-z]' || continue
+        printf '%s' "$_pw" | grep -q '[0-9]' || continue
+        break
+    done
+    printf '%s\n' "$_pw"
 }
 
 # 单次尝试占锁，语义与 sub_lib.sh 的 mihomo_lib_lock_acquire 完全一致
@@ -161,6 +162,57 @@ apply_secret_files() {
             return 1
         fi
     done
+
+    # authentication 块口令联动：LAN 暴露注入的 SOCKS 凭证与 API secret 同值
+    # （sub_lib.sh compose 注入 - "user:<secret>"）。只改 config.yaml 的列表项
+    # 密码段、保留用户名；模板不在此列（compose 会在下次重组合时读 env 注入新值）。
+    # 原子替换，写失败不回滚（与上方文件同一策略），但绝不留下半截文件。
+    if [ -f "$CONFIG_FILE" ] && grep -q '^authentication:' "$CONFIG_FILE"; then
+        _tmp_auth="$(mktemp "$(dirname "$CONFIG_FILE")/.auth.XXXXXX")" || {
+            echo "error: failed to create temporary file for authentication sync" >&2
+            rm -f "$_sed_script"
+            return 1
+        }
+        if ! MIHOMO_ROTATE_AUTH_PASS="$_new_secret" awk '
+            BEGIN { nv = ENVIRON["MIHOMO_ROTATE_AUTH_PASS"] }
+            /^[^[:space:]#]/ { in_auth = ($0 ~ /^authentication:/) ? 1 : 0 }
+            in_auth && /^[[:space:]]*-[[:space:]]*"[^"]*"/ {
+                line = $0
+                if (match(line, /"[^"]*"/)) {
+                    head = substr(line, 1, RSTART)
+                    tail = substr(line, RSTART + RLENGTH - 1)
+                    pair = substr(line, RSTART + 1, RLENGTH - 2)
+                    n = index(pair, ":")
+                    user = (n > 1) ? substr(pair, 1, n - 1) : pair
+                    printf "%s%s:%s%s\n", head, user, nv, tail
+                    next
+                }
+            }
+            { print }
+        ' "$CONFIG_FILE" > "$_tmp_auth"; then
+            echo "error: failed to sync authentication password in $CONFIG_FILE" >&2
+            rm -f "$_tmp_auth"
+            rm -f "$_sed_script"
+            return 1
+        fi
+        if ! chmod 0600 "$_tmp_auth"; then
+            echo "error: failed to chmod 0600 authentication temp file" >&2
+            rm -f "$_tmp_auth"
+            rm -f "$_sed_script"
+            return 1
+        fi
+        if ! mv -f "$_tmp_auth" "$CONFIG_FILE"; then
+            echo "error: failed to replace $CONFIG_FILE after authentication sync" >&2
+            rm -f "$_tmp_auth"
+            rm -f "$_sed_script"
+            return 1
+        fi
+        if ! grep -qF ":$_new_secret\"" "$CONFIG_FILE"; then
+            echo "error: verification failed for authentication sync in $CONFIG_FILE" >&2
+            rm -f "$_sed_script"
+            return 1
+        fi
+    fi
 
     if [ -f "$ENV_FILE" ]; then
         if ! chmod 0600 "$ENV_FILE"; then

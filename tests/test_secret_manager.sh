@@ -192,4 +192,51 @@ if [ -z "$MASKED_READONLY" ] || [ "$MASKED_READONLY" = "NOT_CONFIGURED" ]; then
 fi
 echo "  [PASS] lock acquired, released, stale lock recovered, read-only path unlocked"
 
+# Test 10: 安装初始化轮换策略——16 字符、[A-Za-z0-9]、必含大写/小写/数字
+echo "--> Test 10: generated secret policy (16 chars, upper+lower+digit)..."
+i=0
+while [ "$i" -lt 10 ]; do
+    sh "$SECRET_MGR" generate > /dev/null
+    GEN="$(cat "$MIHOMO_SECRET_FILE")"
+    [ "${#GEN}" -eq 16 ] || { echo "FAIL: generated length ${#GEN} != 16: $GEN"; exit 1; }
+    _residue="$(printf '%s' "$GEN" | tr -d 'A-Za-z0-9')"
+    [ -z "$_residue" ] || { echo "FAIL: charset outside [A-Za-z0-9]: $GEN"; exit 1; }
+    printf '%s' "$GEN" | grep -q '[A-Z]' || { echo "FAIL: missing uppercase: $GEN"; exit 1; }
+    printf '%s' "$GEN" | grep -q '[a-z]' || { echo "FAIL: missing lowercase: $GEN"; exit 1; }
+    printf '%s' "$GEN" | grep -q '[0-9]' || { echo "FAIL: missing digit: $GEN"; exit 1; }
+    i=$((i + 1))
+done
+echo "  [PASS] 10/10 generations meet 16-char upper+lower+digit policy"
+
+# Test 11: 轮换联动 authentication 块（SOCKS 凭证与 API secret 同值，用户名保留）
+echo "--> Test 11: rotation syncs authentication block password..."
+cat > "$MIHOMO_CONFIG_FILE" <<'EOF'
+socks-port: 7891
+allow-lan: true
+authentication:
+  - "mihomo:oldpass"
+  - "admin:oldpass"
+  - "svc"
+external-controller: 0.0.0.0:9090
+secret: "oldpass"
+mode: rule
+EOF
+LINE_BEFORE=$(grep -c "" "$MIHOMO_CONFIG_FILE")
+sh "$SECRET_MGR" generate > /dev/null
+GEN11="$(cat "$MIHOMO_SECRET_FILE")"
+grep -qF "secret: \"$GEN11\"" "$MIHOMO_CONFIG_FILE" || { echo "FAIL: secret line not rotated"; exit 1; }
+grep -qF '  - "mihomo:'"$GEN11"'"' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: mihomo entry not rotated"; exit 1; }
+grep -qF '  - "admin:'"$GEN11"'"' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: admin entry username lost"; exit 1; }
+grep -qF '  - "svc:'"$GEN11"'"' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: colon-less entry not given user:pass"; exit 1; }
+grep -qF '"mihomo:oldpass"' "$MIHOMO_CONFIG_FILE" && { echo "FAIL: stale password left behind"; exit 1; }
+grep -qF 'allow-lan: true' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: non-auth lines damaged"; exit 1; }
+grep -qxF 'mode: rule' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: block-end line damaged"; exit 1; }
+LINE_AFTER=$(grep -c "" "$MIHOMO_CONFIG_FILE")
+[ "$LINE_BEFORE" -eq "$LINE_AFTER" ] || { echo "FAIL: line count changed $LINE_BEFORE -> $LINE_AFTER"; exit 1; }
+# 无 authentication 块的配置轮换必须零改动
+printf 'socks-port: 7891\nsecret: "x"\n' > "$MIHOMO_CONFIG_FILE"
+sh "$SECRET_MGR" set "b64:$(printf '%s' "$GEN11" | base64)" > /dev/null
+grep -qxF 'socks-port: 7891' "$MIHOMO_CONFIG_FILE" || { echo "FAIL: no-auth config damaged by rotation"; exit 1; }
+echo "  [PASS] authentication entries rewritten in place, non-auth content intact"
+
 echo "===> Secret Manager tests PASSED 100%!"
