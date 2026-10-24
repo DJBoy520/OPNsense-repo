@@ -24,7 +24,7 @@ die() {
 MIHOMO_VERSION_ENV="$SCRIPT_DIR/build/mihomo-version.env"
 [ -f "$MIHOMO_VERSION_ENV" ] || die "missing required file: build/mihomo-version.env"
 
-# 环境变量优先于锁定文件，便于临时切换镜像/版本
+# 环境变量可覆盖资产名与镜像地址；内容仍须匹配锁定哈希，换版本需同步更新版本锁定文件
 MIHOMO_ASSET_OVERRIDE="${MIHOMO_ASSET:-}"
 MIHOMO_DOWNLOAD_URL_OVERRIDE="${MIHOMO_DOWNLOAD_URL:-}"
 
@@ -36,6 +36,9 @@ MIHOMO_DOWNLOAD_URL="${MIHOMO_DOWNLOAD_URL_OVERRIDE:-${MIHOMO_URL:-}}"
 
 [ -n "$MIHOMO_ASSET" ] || die "MIHOMO_ASSET not specified in $MIHOMO_VERSION_ENV"
 [ -n "$MIHOMO_DOWNLOAD_URL" ] || die "MIHOMO_URL not specified in $MIHOMO_VERSION_ENV"
+# 供应链锁定必须双哈希齐备：archive 锁定发布资产，unpacked 锁定实际装机二进制
+[ -n "${MIHOMO_SHA256:-}" ] || die "MIHOMO_SHA256 not specified in $MIHOMO_VERSION_ENV"
+[ -n "${MIHOMO_UNPACKED_SHA256:-}" ] || die "MIHOMO_UNPACKED_SHA256 not specified in $MIHOMO_VERSION_ENV"
 
 WORKDIR="${WORKDIR:-"$SCRIPT_DIR/work/freebsd-pkg"}"
 STAGEDIR="$WORKDIR/stage"
@@ -143,6 +146,31 @@ copy_tree() {
     (cd "$src" && tar --exclude '.DS_Store' --exclude '._*' --exclude '*.xz' -cf - .) | (cd "$dst" && tar -xf -)
 }
 
+# FreeBSD 自带 sha256，Linux 交叉构建只有 sha256sum/shasum
+calc_sha256() {
+    _hash_file="$1"
+    if command -v sha256 >/dev/null 2>&1; then
+        sha256 -q "$_hash_file"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$_hash_file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$_hash_file" | awk '{print $1}'
+    else
+        die "no SHA256 tool available (sha256, sha256sum, or shasum)"
+    fi
+}
+
+verify_sha256() {
+    _verify_label="$1"
+    _verify_file="$2"
+    _verify_expected="$3"
+    [ -n "$_verify_expected" ] || die "pinned SHA256 for $_verify_label is empty"
+    _verify_actual="$(calc_sha256 "$_verify_file")"
+    [ "$_verify_actual" = "$_verify_expected" ] ||
+        die "$_verify_label SHA256 mismatch: expected $_verify_expected got $_verify_actual"
+    echo "==> $_verify_label SHA256 verified: $_verify_actual"
+}
+
 download_file() {
     download_url="$1"
     download_dst="$2"
@@ -181,13 +209,17 @@ prepare_binary() {
     mkdir -p "$DOWNLOADDIR"
     if [ -f "$local_asset" ]; then
         echo "==> Using local asset $local_asset"
+        verify_sha256 "local asset archive" "$local_asset" "$MIHOMO_SHA256"
         unpack_binary "$local_asset" "$binary_dst"
     else
         echo "==> Downloading $binary_url"
         rm -f "$archive"
         download_file "$binary_url" "$archive"
+        # MIHOMO_ASSET/MIHOMO_DOWNLOAD_URL 覆盖路径同样落到这里，不允许绕过校验
+        verify_sha256 "downloaded archive" "$archive" "$MIHOMO_SHA256"
         unpack_binary "$archive" "$binary_dst"
     fi
+    verify_sha256 "unpacked mihomo binary" "$binary_dst" "$MIHOMO_UNPACKED_SHA256"
 }
 
 echo "==> Staging files"

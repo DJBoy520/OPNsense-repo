@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # os-mihomo pre-install (upgrade protection)
-# 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切 % 字符。
+# 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切百分号字符。
 # 顺序（先切断传输层，再停核心，最后快照）：transport-disable → 停 mihomo（先
 # SIGTERM 优雅等待，超时才 SIGKILL，防 bbolt 脏状态）→ 快照用户数据 → 清 pid/状态文件。
 
@@ -13,8 +13,10 @@ PID_FILE=/var/run/mihomo.pid
 echo "===> os-mihomo pre-install: protecting user configuration"
 
 # 1. Transport layer first (flush PF anchor, stop hev) — idempotent, best effort
+# 必须用 flush 而非 disable：disable 会把模式意图写成 proxy，升级中断/健康门禁失败
+# 后 transparent 被永久静默降级且 recover 永不补挂；flush 只拆 anchor 与 hev。
 if [ -x "$TRANSPORT_MGR" ]; then
-    "$TRANSPORT_MGR" disable >/dev/null 2>&1 || true
+    "$TRANSPORT_MGR" flush >/dev/null 2>&1 || true
 fi
 
 # 2. Stop service manager instance (graceful)
@@ -49,7 +51,11 @@ for _f in config.yaml sub/env custom-rules.txt secret.key sub/template_config.ya
     if [ -f "$CONF_DIR/$_f" ]; then
         _d="$SNAP_DIR/$(dirname "$_f")"
         mkdir -p "$_d" 2>/dev/null || true
-        cp -f "$CONF_DIR/$_f" "$SNAP_DIR/$_f" 2>/dev/null || true
+        # 快照失败等于用户配置丢失，必须中止安装而不是静默继续
+        if ! cp -f "$CONF_DIR/$_f" "$SNAP_DIR/$_f"; then
+            echo "ERROR: failed to snapshot $CONF_DIR/$_f to $SNAP_DIR/$_f, aborting install." >&2
+            exit 1
+        fi
         chmod 0600 "$SNAP_DIR/$_f" 2>/dev/null || true
     fi
 done

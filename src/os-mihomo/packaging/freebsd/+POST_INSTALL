@@ -3,8 +3,8 @@
 # os-mihomo post-install (socks-core mode + upgrade protection)
 # 本模式不写 /conf/config.xml、不改 Unbound；PF 只允许 mihomo-transport anchor。
 # 本脚本整体内嵌进 +MANIFEST 由 pkg 执行：禁止反斜杠续行、禁止一切百分号字符。
-# 严格顺序：① 快照恢复（缺失项用 sample 兜底） ② secret 仅在缺失时生成
-# ③ 健康门禁 ④ 按模型幂等重挂透明代理传输层。
+# 严格顺序：① 快照恢复（缺失项用 sample 兜底） ② 每次安装强制轮换 secret
+# ③ 健康门禁 ④ 按模型幂等重挂透明代理传输层 ⑤ watchdog cron 自举。
 
 echo "===> Configuring os-mihomo (socks-core mode)"
 
@@ -143,11 +143,16 @@ if [ "$HEALTH_OK" -eq 1 ] && [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/tr
 fi
 
 # ---- Step 5: watchdog cron 自举（fail-open 安全网自安装起生效） ----
-# 订阅自动更新节律仍由订阅设置保存时重写；这里只保证每分钟 watchdog 兜底在场，
-# 否则全新安装未保存订阅前 transparent 模式核心死亡会导致 LAN 无自动旁路。
-# 注意：manifest 内嵌禁止反斜杠续行，php 命令必须单行。
+# 重写 /etc/cron.d 前从模型读回订阅节律（Mihomo.xml subscription/auto_update
+# 与 auto_interval，默认 0/o24h），否则每次升级都会删掉既有订阅自动更新行。
+# 注意：manifest 内嵌禁止反斜杠续行与百分号字符，php 命令必须绝对路径单行。
 if [ -x /usr/local/bin/php ] && [ -f /usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php ]; then
-    /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php --cron-only 0 o24h > /dev/null 2>&1 || echo "WARNING: watchdog cron bootstrap failed; fail-open safety net inactive until subscription save." >&2
+    _CRON_MODEL=$(/usr/local/bin/php -r '$c=@simplexml_load_file("/conf/config.xml");$au="0";$ai="o24h";if($c){$a=$c->xpath("//OPNsense/mihomo/subscription/auto_update");$i=$c->xpath("//OPNsense/mihomo/subscription/auto_interval");if(!empty($a)){$v=trim((string)$a[0]);if($v==="1"||$v==="true"){$au="1";}}$ok=array("o6h","o12h","o24h");if(!empty($i)){$v=trim((string)$i[0]);if(in_array($v,$ok,true)){$ai=$v;}}}echo $au . " " . $ai;' 2>/dev/null || true)
+    _AUTO_UPDATE=$(echo "$_CRON_MODEL" | cut -d' ' -f1)
+    _AUTO_INTERVAL=$(echo "$_CRON_MODEL" | cut -d' ' -f2)
+    case "$_AUTO_UPDATE" in 0|1) ;; *) _AUTO_UPDATE=0 ;; esac
+    case "$_AUTO_INTERVAL" in o6h|o12h|o24h) ;; *) _AUTO_INTERVAL=o24h ;; esac
+    /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php --cron-only "$_AUTO_UPDATE" "$_AUTO_INTERVAL" > /dev/null 2>&1 || echo "WARNING: watchdog cron bootstrap failed; fail-open safety net inactive until subscription save." >&2
 fi
 
 # 一键安装钩子：pkg 会把调用方环境传给本脚本，带 MIHOMO_SETUP_URL 即装即部署

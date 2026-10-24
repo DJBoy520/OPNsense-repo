@@ -73,7 +73,27 @@ echo "==> Configuration successfully updated to $TARGET_CONFIG (permissions: 060
 if [ "$RELOAD_FLAG" = "reload" ]; then
     echo "==> Step 4: Reloading Mihomo daemon"
     if [ -x "/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh" ]; then
-        /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh reload || true
+        # reload 非 0 表示配置运行期未生效（SIGHUP 成功但健康探测失败）。
+        # 此时磁盘上的新配置已被判定不可用，必须回滚，否则下次启动会再次加载它。
+        if ! /usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh reload; then
+            if [ -f "$BACKUP_CONFIG" ]; then
+                RESTORE_FILE="$(mktemp "$CONFIG_DIR/config.yaml.restore.XXXXXX")" || RESTORE_FILE=""
+                [ -n "$RESTORE_FILE" ] || die "reload failed and rollback staging file could not be created"
+                cp -f "$BACKUP_CONFIG" "$RESTORE_FILE" || {
+                    rm -f "$RESTORE_FILE"
+                    die "reload failed and rollback copy failed; $TARGET_CONFIG holds the unconfirmed configuration"
+                }
+                chmod 0600 "$RESTORE_FILE"
+                mv -f "$RESTORE_FILE" "$TARGET_CONFIG" || {
+                    rm -f "$RESTORE_FILE"
+                    die "reload failed and rollback rename failed; $TARGET_CONFIG holds the unconfirmed configuration"
+                }
+                echo "ERROR: reload failed; rolled back $TARGET_CONFIG from $BACKUP_CONFIG" >&2
+                echo "ERROR: mihomo may still be running the rejected configuration; check the service state and restart it." >&2
+                exit 1
+            fi
+            die "reload failed and no backup exists; $TARGET_CONFIG holds the unconfirmed configuration"
+        fi
     fi
 fi
 

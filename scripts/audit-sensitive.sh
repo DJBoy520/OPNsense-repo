@@ -3,13 +3,15 @@
 # 敏感信息审计脚本（只读扫描，命中文档:行号，不打印具体命中值，非 0 退出）
 #
 # 规则：
-# 1. 优先读取 .private/sensitive-patterns.txt（若存在且非空），按其中真实模式扫描 tracked 文件
-# 2. 否则执行通用检查：
+# 1. .private/sensitive-patterns.txt（若存在且非空）里的自定义模式叠加到通用检查之上，
+#    绝不替代通用规则
+# 2. 通用检查：
 #    - 个人主目录绝对路径（/home/<user>）
 #    - OPNsense 默认账号口令（root/opnsense 等）
-#    - 个人邮箱
-#    - 真实私网 IPv4（带 RFC1918/TEST-NET 示例 allowlist）
+#    - 个人邮箱（公共邮箱域不整域放行）
+#    - 真实私网 IPv4（逐 IP 判定字面示例 allowlist）
 # 3. 命中输出: "文件:行号: [规则类型] 命中敏感信息"，不打印命中值，退出非 0
+# 4. 脚本尾部自检合成泄露样例，规则回归时自检失败退出 1
 
 set -eu
 
@@ -65,7 +67,6 @@ def is_binary(filepath):
         return True
 
 # 检查是否存在 .private/sensitive-patterns.txt
-use_custom_patterns = False
 custom_patterns = []
 if os.path.isfile(pattern_file) and os.path.getsize(pattern_file) > 0:
     try:
@@ -74,117 +75,120 @@ if os.path.isfile(pattern_file) and os.path.getsize(pattern_file) > 0:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     custom_patterns.append(line)
-        if custom_patterns:
-            use_custom_patterns = True
     except Exception as e:
         sys.stderr.write(f"Warning: could not read {pattern_file}: {e}\n")
 
 hits = []
 
-if use_custom_patterns:
-    # 按照自定义模式逐条扫描
-    compiled = []
-    for pat in custom_patterns:
-        try:
-            compiled.append((pat, re.compile(pat, re.IGNORECASE)))
-        except Exception:
-            compiled.append((pat, re.compile(re.escape(pat), re.IGNORECASE)))
-    
-    for relpath in tracked_files:
-        if not os.path.isfile(relpath) or is_binary(relpath):
-            continue
-        try:
-            with open(relpath, "r", encoding="utf-8", errors="ignore") as f:
-                for line_idx, line in enumerate(f, 1):
-                    for pat_str, reg in compiled:
-                        if reg.search(line):
-                            hits.append(f"{relpath}:{line_idx}: [custom-pattern] 命中匹配规则")
-                            break
-        except Exception:
-            pass
-else:
-    # 通用规则扫描
-    # 规则 1: 个人家目录路径
-    re_home = re.compile(r"/home/[a-zA-Z0-9_-]+", re.IGNORECASE)
+# 通用规则（始终执行；自定义 patterns 只是叠加，不替代通用检查）
+# 规则 1: 个人家目录路径
+re_home = re.compile(r"/home/[a-zA-Z0-9_-]+", re.IGNORECASE)
 
-    # 规则 2: OPNsense 默认账号口令组合
-    re_cred = re.compile(r"\b(root/opnsense|root:opnsense)\b", re.IGNORECASE)
+# 规则 2: OPNsense 默认账号口令组合
+re_cred = re.compile(r"\b(root/opnsense|root:opnsense)\b", re.IGNORECASE)
 
-    # 规则 4: 邮箱地址 (排除上游开源许可证通用版权邮箱、文档样例 example.com / @opnsense.org)
-    re_email = re.compile(r"\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
+# 规则 4: 邮箱地址 (排除上游开源许可证通用版权邮箱、文档样例 example.com / @opnsense.org)
+re_email = re.compile(r"\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 
-    # 规则 5: 私网 IPv4 地址
-    re_ipv4 = re.compile(r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b")
+# 规则 5: 私网 IPv4 地址
+re_ipv4 = re.compile(r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b")
 
-    # 允许的示例 IP 与技术规范 CIDR (白名单)
-    allowed_ip_substrings = [
-        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-        "10.0.0.1", "10.0.0.2", "10.0.0.2/30",
-        "172.19.0.1/30", "172.19.0.1",
-        "192.168.1.0/24", "192.168.1.1", "192.168.1.7", "192.168.1.10", "192.168.1.10:12345", "192.168.1.10:9095",
-        "192.168.10.0/24", "192.168.101.0/24", "10.125.0.1/24", "10.125.0.1",
-        "192.168.50.2", "192.168.50.255", "10.9.9.9", "10.9.9.90", "10.20.30.40"
-    ]
+# 允许的示例 IP 与技术规范 CIDR (白名单)
+allowed_ip_substrings = [
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "10.0.0.1", "10.0.0.2", "10.0.0.2/30",
+    "172.19.0.1/30", "172.19.0.1",
+    "192.168.1.0/24", "192.168.1.1", "192.168.1.7", "192.168.1.10", "192.168.1.10:12345", "192.168.1.10:9095",
+    "192.168.10.0/24", "192.168.101.0/24", "10.125.0.1/24", "10.125.0.1",
+    "192.168.50.2", "192.168.50.255", "10.9.9.9", "10.9.9.90", "10.20.30.40"
+]
+# 白名单按字面示例逐 IP 精确判定：CIDR/端口写法只用于文档展示，绝不整网段放行，
+# 否则同一行任意一个白名单示例都会掩护同行的真实地址。
+allowed_ip_literals = {token.split(":")[0].split("/")[0] for token in allowed_ip_substrings}
 
-    # 允许的邮箱白名单 (上游开源软件的原作者、开源组织、测试样例)
-    allowed_email_domains = [
-        "opnsense.org", "glockners.net", "cekal.org", "gmail.com", "lshell.com",
-        "frenking.eu", "der-ingo.de", "bluemedia.dev", "neon1.net", "max-it.de",
-        "li.org", "example.com", "example.org", "example.net"
-    ]
+# 允许的邮箱白名单 (上游开源软件的原作者、开源组织、测试样例)
+# 公共邮箱域（gmail.com 等）不得整域放行；上游版权头里的具体作者地址单独精确豁免。
+allowed_email_domains = [
+    "opnsense.org", "glockners.net", "cekal.org", "lshell.com",
+    "frenking.eu", "der-ingo.de", "bluemedia.dev", "neon1.net", "max-it.de",
+    "li.org", "example.com", "example.org", "example.net"
+]
+allowed_emails = {"ilumos@gmail.com", "sullrich@gmail.com"}
 
-    # 内部文件豁免（根据 IMPL-1.2.0-packages.md 要求，内部交接文档及未脱敏工作日志由 export-public 排除，不在本包中删除）
-    # 但如果在导出后的公开发布目录中，则不得有任何豁免
-    exempt_internal = {"docs/HANDOFF-20261017.md", "docs/HANDOFF-20261019.md", "progress.md", "scripts/audit-sensitive.sh"} if not cli_target_dir else set()
+def ip_allowed(ip):
+    return ip in allowed_ip_literals
 
-    for relpath in tracked_files:
-        if relpath in exempt_internal:
-            continue
-        if os.path.basename(relpath) == "audit-sensitive.sh":
-            continue
-        if not os.path.isfile(relpath) or is_binary(relpath):
-            continue
+def email_allowed(em):
+    if em.lower() in allowed_emails:
+        return True
+    return em.split("@")[-1].lower() in allowed_email_domains
 
-        try:
-            with open(relpath, "r", encoding="utf-8", errors="ignore") as f:
-                for line_idx, line in enumerate(f, 1):
-                    # 规则 1: 个人家目录路径
-                    if re_home.search(line):
-                        hits.append(f"{relpath}:{line_idx}: [user-home] 命中个人绝对路径模式")
-                        continue
+def general_tags(line):
+    tags = []
+    if re_home.search(line):
+        tags.append("user-home")
+    if re_cred.search(line):
+        tags.append("default-credentials")
+    if any(not email_allowed(em) for em in re_email.findall(line)):
+        tags.append("personal-email")
+    if any(not ip_allowed(ip) for ip in re_ipv4.findall(line)):
+        tags.append("private-ipv4")
+    return tags
 
-                    # 规则 2: OPNsense 默认账号口令
-                    if re_cred.search(line):
-                        hits.append(f"{relpath}:{line_idx}: [default-credentials] 命中默认账号口令模式")
-                        continue
+TAG_MESSAGES = {
+    "user-home": "命中个人绝对路径模式",
+    "default-credentials": "命中默认账号口令模式",
+    "personal-email": "命中未登记域名的个人邮箱",
+    "private-ipv4": "命中未列入白名单的私网 IPv4 地址",
+}
 
-                    # 规则 4: 邮箱
-                    m_emails = re_email.findall(line)
-                    if m_emails:
-                        bad_email = False
-                        for em in m_emails:
-                            dom = em.split("@")[-1].lower()
-                            if dom not in allowed_email_domains:
-                                bad_email = True
-                                break
-                        if bad_email:
-                            hits.append(f"{relpath}:{line_idx}: [personal-email] 命中未登记域名的个人邮箱")
-                            continue
+# 按照自定义模式逐条扫描（叠加在通用规则之上）
+compiled = []
+for pat in custom_patterns:
+    try:
+        compiled.append((pat, re.compile(pat, re.IGNORECASE)))
+    except Exception:
+        compiled.append((pat, re.compile(re.escape(pat), re.IGNORECASE)))
 
-                    # 规则 5: 私网 IPv4
-                    m_ips = re_ipv4.findall(line)
-                    if m_ips:
-                        bad_ip = False
-                        for ip in m_ips:
-                            # 检查是否匹配任何白名单前缀或示例
-                            if not any(token in line for token in allowed_ip_substrings):
-                                bad_ip = True
-                                break
-                        if bad_ip:
-                            hits.append(f"{relpath}:{line_idx}: [private-ipv4] 命中未列入白名单的私网 IPv4 地址")
-                            continue
-        except Exception:
-            pass
+# 内部文件豁免（根据 IMPL-1.2.0-packages.md 要求，内部交接文档及未脱敏工作日志由 export-public 排除，不在本包中删除）
+# 但如果在导出后的公开发布目录中，则不得有任何豁免
+exempt_internal = {"docs/HANDOFF-20261017.md", "docs/HANDOFF-20261019.md", "progress.md", "scripts/audit-sensitive.sh"} if not cli_target_dir else set()
+
+for relpath in tracked_files:
+    if relpath in exempt_internal:
+        continue
+    if os.path.basename(relpath) == "audit-sensitive.sh":
+        continue
+    if not os.path.isfile(relpath) or is_binary(relpath):
+        continue
+
+    try:
+        with open(relpath, "r", encoding="utf-8", errors="ignore") as f:
+            for line_idx, line in enumerate(f, 1):
+                for tag in general_tags(line):
+                    hits.append(f"{relpath}:{line_idx}: [{tag}] {TAG_MESSAGES[tag]}")
+                for pat_str, reg in compiled:
+                    if reg.search(line):
+                        hits.append(f"{relpath}:{line_idx}: [custom-pattern] 命中匹配规则")
+                        break
+    except Exception:
+        pass
+
+# ---- 自检：合成泄露样例必须被通用规则标记 ----
+# 回归防线：白名单曾是整行放行（同行任意白名单串即掩护所有 IP），
+# 公共邮箱域也曾整域放行；任一回归都必须让审计自身失败。
+selfcheck_cases = [
+    ("白名单行内夹杂非白名单 IP", "示例 10.0.0.1 与 10.99.7.7", "private-ipv4"),
+    ("个人 gmail 邮箱", "联系 someone.personal@gmail.com", "personal-email"),
+]
+selfcheck_failed = False
+for _name, _sample, _tag in selfcheck_cases:
+    if _tag not in general_tags(_sample):
+        sys.stderr.write(f"ERROR: audit self-check failed: {_name} 未被标记\n")
+        selfcheck_failed = True
+if selfcheck_failed:
+    sys.stderr.write("=== 敏感信息扫描失败: 审计规则自检未通过 ===\n")
+    sys.exit(1)
 
 if hits:
     print(f"=== 敏感信息扫描失败: 发现 {len(hits)} 处可能泄露 ===", file=sys.stderr)

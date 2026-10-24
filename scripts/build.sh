@@ -263,6 +263,10 @@ echo "==> Generating metadata (+MANIFEST)"
 cp "$META_DIR/+MANIFEST" "$META_DIR/+COMPACT_MANIFEST"
 
 # 7. Package into FreeBSD pkg (tar.gz format)
+# output/ 会累积历史 pkg，而 SHA256SUMS 只列本次产物；打包前清理旧包，
+# 避免 verify-package.sh 面对未登记的历史产物。
+OUTPUT_BASENAME="$(basename "$OUTPUT_PKG")"
+find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pkg' ! -name "$OUTPUT_BASENAME" -delete
 echo "==> Packaging into $OUTPUT_PKG"
 install -m 0644 "$META_DIR/+COMPACT_MANIFEST" "$PKG_ROOT/+COMPACT_MANIFEST"
 install -m 0644 "$META_DIR/+MANIFEST" "$PKG_ROOT/+MANIFEST"

@@ -23,6 +23,12 @@ TRANSPORT_MODE_FILE="/var/db/os-mihomo/transport-mode"
 BIN="/usr/local/bin/mihomo"
 CONF_DIR="/usr/local/etc/mihomo"
 TUN_DEV="tun_mihomo"
+# 透明代理的数据面是 hev + tun0（anchor 用 route-to 指向它），与 mihomo 自建
+# tun_mihomo 是两套互斥实现，必须各自探测。
+HEV_PID_FILE="/var/run/mihomo_hev.pid"
+HEV_TUN_DEV="${MIHOMO_TUN_DEV:-tun0}"
+STRIKE_FILE="/var/db/os-mihomo/watchdog-strikes"
+FAILOPEN_STRIKES_REQUIRED=2
 
 log() {
     ts="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -61,6 +67,67 @@ transport_mode_now() {
 port_listening() {
     # $1 = port
     sockstat -4 -l -p "$1" 2>/dev/null | grep -q "$1" || sockstat -4 -l 2>/dev/null | grep -q "127.0.0.1:$1"
+}
+
+# 数据面判据去抖：单次采样失败（SIGHUP 重绑窗口、sockstat 瞬时抖动）不得直接杀服，
+# 否则一次误判即永久停服。计数文件记录 "连续次数:判据文本"，判据变化从 1 重新计数。
+# 返回 0 表示同一判据已连续失败达阈值。
+strike_fail() {
+    _reason="$1"
+    _prev="$(cat "$STRIKE_FILE" 2>/dev/null || true)"
+    _prev_n="${_prev%%:*}"
+    case "$_prev_n" in
+        ''|*[!0-9]*) _prev_n=0 ;;
+    esac
+    if [ "${_prev#*:}" = "$_reason" ]; then
+        _n=$((_prev_n + 1))
+    else
+        _n=1
+    fi
+    mkdir -p "$(dirname "$STRIKE_FILE")" 2>/dev/null || true
+    if printf '%s:%s\n' "$_n" "$_reason" > "${STRIKE_FILE}.tmp.$$" 2>/dev/null; then
+        mv -f "${STRIKE_FILE}.tmp.$$" "$STRIKE_FILE" 2>/dev/null || rm -f "${STRIKE_FILE}.tmp.$$"
+    fi
+    log "WARNING: health check strike ${_n}/${FAILOPEN_STRIKES_REQUIRED}: ${_reason}"
+    [ "$_n" -ge "$FAILOPEN_STRIKES_REQUIRED" ]
+}
+
+# 清零计数；仅在确有计数时写日志，避免每分钟巡检刷屏
+strike_clear() {
+    if [ -f "$STRIKE_FILE" ]; then
+        rm -f "$STRIKE_FILE" 2>/dev/null || true
+        log "Watchdog strike counter reset ($1)."
+    fi
+}
+
+# 数据面判据失败处理：未达阈值只记录并等待下一轮；达阈值才 fail-open。
+data_plane_fail() {
+    _reason="$1"
+    if strike_fail "$_reason"; then
+        strike_clear "fail-open triggered"
+        trigger_failopen "$_reason"
+    fi
+    exit 1
+}
+
+# 透明模式传输层自愈：hev 死亡或 tun0 消失时 anchor 仍挂着，LAN 流量会被
+# route-to 送进死接口（transport_probe 走 127.0.0.1 完全看不出来）。
+# 先 flush 拆掉 anchor 回到直连（fail-open 语义），再幂等 enable 重挂；
+# enable 失败则保持直连，下一轮巡检继续尝试。
+repair_transport() {
+    _why="$1"
+    log "CRITICAL: Transparent transport layer fault (${_why}); mihomo core keeps running, rebuilding transport."
+    if [ -x "$TRANSPORT_MGR" ]; then
+        "$TRANSPORT_MGR" flush >/dev/null 2>&1 || true
+        if "$TRANSPORT_MGR" enable >/dev/null 2>&1; then
+            log "SUCCESS: Transparent transport layer re-mounted (hev + ${HEV_TUN_DEV} ready)."
+            return 0
+        fi
+    else
+        pfctl -a mihomo-transport -F all 2>/dev/null || true
+    fi
+    log "ERROR: Transparent transport re-mount failed; anchor stays cleared, LAN traffic falls back to DIRECT until next probe."
+    return 1
 }
 
 # external-controller 探测地址（§2.3）：复用 sub_lib.sh 解析，库缺失时本地同语义兜底
@@ -123,7 +190,9 @@ CURR_STATE="$(get_current_state)"
 
 case "$CURR_STATE" in
     DISABLED|STOPPED|STOPPING|FAILED)
-        # 期望的非代理状态；DNS 已回退，无动作
+        # 期望的非代理状态；DNS 已回退，无动作。残留计数一并清零，防止停机期间的
+        # 旧计数让下次启动的第一次采样直接触发 fail-open。
+        strike_clear "state ${CURR_STATE}"
         exit 0
         ;;
     RUNNING|DEGRADED)
@@ -181,22 +250,40 @@ fi
 
 # 3. DNS listener check (127.0.0.1:1053) —— AdGuardHome 上游指向此端口，属关键依赖
 if ! port_listening 1053; then
-    trigger_failopen "Mihomo DNS listener (127.0.0.1:1053) is down"
-    exit 1
+    data_plane_fail "Mihomo DNS listener (127.0.0.1:1053) is down"
 fi
 
 # 4. Transport check: tun 模式查接口；socks 模式查 7891
 if tun_enabled; then
     if command -v ifconfig >/dev/null 2>&1; then
         if ! ifconfig "$TUN_DEV" >/dev/null 2>&1; then
-            trigger_failopen "Virtual interface $TUN_DEV not found in system"
-            exit 1
+            data_plane_fail "Virtual interface $TUN_DEV not found in system"
         fi
     fi
 else
     if ! port_listening 7891; then
-        trigger_failopen "Mihomo socks listener (127.0.0.1:7891) is down"
-        exit 1
+        data_plane_fail "Mihomo socks listener (127.0.0.1:7891) is down"
+    fi
+fi
+
+# 4.5 透明模式：hev/tun0 才是 LAN 实际流量的数据面（anchor route-to tun0），
+# 与 7891/1053 健康无关。hev PID 或 tun0 任一缺失即就地重建传输层。
+if [ "$(transport_mode_now)" = "transparent" ]; then
+    _hev_pid="$(cat "$HEV_PID_FILE" 2>/dev/null || true)"
+    _hev_ok=0
+    if [ -n "$_hev_pid" ] && kill -0 "$_hev_pid" 2>/dev/null; then
+        _hev_ok=1
+    fi
+    _tun_ok=0
+    if command -v ifconfig >/dev/null 2>&1; then
+        if ifconfig "$HEV_TUN_DEV" >/dev/null 2>&1; then
+            _tun_ok=1
+        fi
+    else
+        _tun_ok=1
+    fi
+    if [ "$_hev_ok" -ne 1 ] || [ "$_tun_ok" -ne 1 ]; then
+        repair_transport "hev pid=${_hev_pid:-missing} alive=${_hev_ok}, ${HEV_TUN_DEV} present=${_tun_ok}" || exit 1
     fi
 fi
 
@@ -210,4 +297,5 @@ if [ "$(transport_mode_now)" = "transparent" ] && [ -x "$TRANSPORT_MGR" ]; then
 fi
 
 # All checks passed
+strike_clear "health checks passed"
 exit 0

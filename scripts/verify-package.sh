@@ -34,11 +34,35 @@ calc_sha256() {
 [ -f "$OUTPUT_DIR/SHA256SUMS" ] || die "SHA256SUMS not found in $OUTPUT_DIR"
 [ -f "$OUTPUT_DIR/build-info.json" ] || die "build-info.json not found in $OUTPUT_DIR"
 
-# Find package files
+# 校验范围以 SHA256SUMS 为准：它只列本次构建产物，output/ 可能残留历史包。
+# 未登记的历史包仅提示不阻断（它们不属于本次发布内容）。
+PKG_FILES=()
+while IFS= read -r _sum_line || [ -n "$_sum_line" ]; do
+    case "$_sum_line" in
+        ''|'#'*) continue ;;
+    esac
+    _sum_name="${_sum_line##* }"
+    [ -n "$_sum_name" ] || continue
+    PKG_FILES+=("$OUTPUT_DIR/$_sum_name")
+done < "$OUTPUT_DIR/SHA256SUMS"
+[ "${#PKG_FILES[@]}" -gt 0 ] || die "No package entries found in $OUTPUT_DIR/SHA256SUMS"
+
+for _pkg in "${PKG_FILES[@]}"; do
+    [ -f "$_pkg" ] || die "Package listed in SHA256SUMS is missing: $(basename "$_pkg")"
+done
+
 shopt -s nullglob
-PKG_FILES=("$OUTPUT_DIR"/*.pkg)
+for _existing in "$OUTPUT_DIR"/*.pkg; do
+    _listed=0
+    for _pkg in "${PKG_FILES[@]}"; do
+        if [ "$(basename "$_pkg")" = "$(basename "$_existing")" ]; then
+            _listed=1
+            break
+        fi
+    done
+    [ "$_listed" -eq 1 ] || log "NOTE: skipping $(basename "$_existing") (not listed in SHA256SUMS; stale artifact)"
+done
 shopt -u nullglob
-[ "${#PKG_FILES[@]}" -gt 0 ] || die "No .pkg files found in $OUTPUT_DIR"
 
 log "Found package(s): ${PKG_FILES[*]}"
 

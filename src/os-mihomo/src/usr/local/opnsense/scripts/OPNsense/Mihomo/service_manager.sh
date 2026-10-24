@@ -450,7 +450,9 @@ do_reload() {
     if kill -HUP "${_pid}" 2>/dev/null; then
         echo "Sent SIGHUP to Mihomo (PID ${_pid})."
         sleep 1
-        do_healthcheck
+        # SIGHUP 送达不代表配置已生效：以健康探测结果作为 reload 的真实结果。
+        # 本文件 set -eu，必须用 || 承接，否则非 0 会直接退出而跳过 return
+        do_healthcheck || return $?
         return 0
     else
         echo "Failed to send SIGHUP, restarting."

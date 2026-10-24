@@ -76,7 +76,7 @@
                         </button>
                         <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
                             <span class="text-muted" id="rules_counter" style="font-size: 12px;"></span>
-                            <button class="btn btn-primary btn-sm" id="btn_rules_apply" type="button">
+                            <button class="btn btn-primary btn-sm" id="btn_rules_apply" type="button" disabled>
                                 <b>{{ lang._('校验并应用') }}</b> <i id="btn_rules_apply_progress"></i>
                             </button>
                         </div>
@@ -182,6 +182,8 @@ $(function () {
     var liveGroups = [];
     var currentMode = 'table'; // 'table' or 'raw'
     var searched = false;
+    // 规则内容成功加载前禁止提交：空编辑器一旦提交会清空 custom-rules.txt
+    var rulesLoaded = false;
 
     var effectivePagination = {
         limit: 200,
@@ -756,13 +758,16 @@ $(function () {
 
     /* ---------- 校验并应用 ---------- */
 
-    $('#btn_rules_apply').click(function () {
-        var content = currentEditorText();
+    function submitRules(content, clearRules) {
         var $progress = $('#btn_rules_apply_progress');
         var $button = $('#btn_rules_apply');
         var $fileError = $('#rules_file_error');
         var $errorTable = $('#rules_error_table');
         var $errorBody = $('#rules_error_body');
+        var payload = {content: content};
+        if (clearRules) {
+            payload.clear = '1';
+        }
 
         $progress.addClass('fa fa-spinner fa-pulse');
         $button.prop('disabled', true);
@@ -771,9 +776,9 @@ $(function () {
         $errorTable.hide();
         $('.rule-row-error').hide().empty();
 
-        ajaxCall('/api/mihomo/rules/set', {content: content}, function (data) {
+        ajaxCall('/api/mihomo/rules/set', payload, function (data) {
             $progress.removeClass('fa fa-spinner fa-pulse');
-            $button.prop('disabled', false);
+            $button.prop('disabled', !rulesLoaded);
 
             if (data && data.status === 'ok') {
                 mhToast(data.message ? String(data.message) : '{{ lang._("自定义规则已校验并应用。") }}', 'success');
@@ -818,6 +823,29 @@ $(function () {
 
             mhToast((data && data.message) ? String(data.message) : '{{ lang._("自定义规则校验失败。") }}', 'danger', 6000);
         });
+    }
+
+    $('#btn_rules_apply').click(function () {
+        if (!rulesLoaded) {
+            mhToast('{{ lang._("规则尚未加载完成，请稍后重试或刷新页面。") }}', 'info');
+            return;
+        }
+        var content = currentEditorText();
+        if ($.trim(content) === '') {
+            /* 后端默认拒绝空内容：清空必须在确认后显式携带 clear=1 */
+            BootstrapDialog.confirm({
+                title: '{{ lang._("清空自定义规则") }}',
+                message: '{{ lang._("当前规则内容为空，继续将清空全部自定义规则。确定继续？") }}',
+                type: BootstrapDialog.TYPE_WARNING,
+                callback: function (confirmed) {
+                    if (confirmed) {
+                        submitRules(content, true);
+                    }
+                }
+            });
+            return;
+        }
+        submitRules(content, false);
     });
 
     /* ---------- Tab 与 hash ---------- */
@@ -833,12 +861,20 @@ $(function () {
         if (!initialHash || initialHash.length < 2 || !$.fn.tab) {
             return;
         }
-        if ($(initialHash).length === 0) {
+        /* hash 会拼进 jQuery 选择器：先过白名单，非法值（如 #a[）会让选择器抛异常 */
+        if (!/^#[A-Za-z0-9_-]+$/.test(initialHash)) {
             return;
         }
-        var $anchor = $('a[data-toggle="tab"][href="' + initialHash + '"]');
-        if ($anchor.length > 0) {
-            $anchor.tab('show');
+        try {
+            if ($(initialHash).length === 0) {
+                return;
+            }
+            var $anchor = $('a[data-toggle="tab"][href="' + initialHash + '"]');
+            if ($anchor.length > 0) {
+                $anchor.tab('show');
+            }
+        } catch (e) {
+            /* 非法 hash 选择器：保持默认 Tab */
         }
     }
 
@@ -851,7 +887,8 @@ $(function () {
 
     ajaxGet('/api/mihomo/rules/get', {}, function (data) {
         if (!data || data.status !== 'ok') {
-            mhToast('{{ lang._("加载自定义规则失败。") }}', 'danger');
+            $('#btn_rules_apply').prop('disabled', true);
+            mhToast('{{ lang._("加载自定义规则失败，为避免覆盖已有规则，提交已禁用。") }}', 'danger');
             return;
         }
         if (data.limits && typeof data.limits === 'object') {
@@ -874,6 +911,8 @@ $(function () {
         $('#rules_content').val(initialContent);
         parseTextToTable(initialContent);
         updateCounter();
+        rulesLoaded = true;
+        $('#btn_rules_apply').prop('disabled', false);
         loadLiveGroups();
     });
 });

@@ -63,6 +63,8 @@ class RulesController extends ApiControllerBase
                 'maxLines' => self::MAX_LINES,
                 'maxBytes' => self::MAX_BYTES,
             ],
+            /* 与 setAction 的拒绝规则保持一致：空内容必须显式 clear=1 才允许写入 */
+            'clearRequiresExplicit' => true,
         ];
     }
 
@@ -80,6 +82,15 @@ class RulesController extends ApiControllerBase
         $content = $this->postedContent();
         if ($content === null) {
             return ['status' => 'failed', 'message' => '规则内容格式无效'];
+        }
+
+        // 空内容会把事故（前端空白）固化成 custom-rules.txt 清空：仅显式 clear=1 才允许
+        $clearRequested = (string)$this->request->getPost('clear') === '1';
+        if (!$clearRequested && trim($content) === '') {
+            return [
+                'status' => 'failed',
+                'message' => '空内容将清空自定义规则，如需清空请显式传 clear=1',
+            ];
         }
 
         $tmpFile = tempnam(sys_get_temp_dir(), 'mihomo-rules-');

@@ -5,6 +5,7 @@ SECRET_FILE="${MIHOMO_SECRET_FILE:-/usr/local/etc/mihomo/secret.key}"
 CONFIG_FILE="${MIHOMO_CONFIG_FILE:-/usr/local/etc/mihomo/config.yaml}"
 TEMPLATE_FILE="${MIHOMO_TEMPLATE_FILE:-/usr/local/etc/mihomo/sub/template_config.yaml}"
 ENV_FILE="${MIHOMO_ENV_FILE:-/usr/local/etc/mihomo/sub/env}"
+HEV_CONF="${MIHOMO_HEV_CONF:-/usr/local/etc/mihomo/hev.yaml}"
 
 # 写密钥必须与订阅更新互斥：sub.sh 启动时把旧密钥读进内存，数分钟下载结束后
 # 再合成配置；期间改密钥会被旧值覆盖回写。这里复用 sub_lib.sh 的同一把锁
@@ -17,15 +18,21 @@ LOCK_HELD=0
 # env 单引号三种落地语境均无需转义（与 is_safe_custom_secret 白名单兼容）。
 generate_secret() {
     _pw=""
-    while :; do
-        _pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
-        [ "${#_pw}" -eq 16 ] || continue
-        printf '%s' "$_pw" | grep -q '[A-Z]' || continue
-        printf '%s' "$_pw" | grep -q '[a-z]' || continue
-        printf '%s' "$_pw" | grep -q '[0-9]' || continue
-        break
+    _tries=0
+    while [ "$_tries" -lt 100 ]; do
+        # LC_ALL=C 强制按字节处理：BSD tr 在 UTF-8 locale 下把 /dev/urandom
+        # 当多字节字符流解码，几乎不产出，字符类重试会变成永久空转烧 CPU
+        # （2026-10-24 VM 实锤）；迭代上限兜底，超限报错交由调用方降级处理
+        _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
+        [ "${#_pw}" -eq 16 ] || { _tries=$((_tries + 1)); continue; }
+        printf '%s' "$_pw" | grep -q '[A-Z]' || { _tries=$((_tries + 1)); continue; }
+        printf '%s' "$_pw" | grep -q '[a-z]' || { _tries=$((_tries + 1)); continue; }
+        printf '%s' "$_pw" | grep -q '[0-9]' || { _tries=$((_tries + 1)); continue; }
+        printf '%s\n' "$_pw"
+        return 0
     done
-    printf '%s\n' "$_pw"
+    echo "error: generate_secret failed to produce a compliant 16-char secret after 100 tries" >&2
+    return 1
 }
 
 # 单次尝试占锁，语义与 sub_lib.sh 的 mihomo_lib_lock_acquire 完全一致
@@ -69,6 +76,113 @@ subscription_lock_release() {
         rmdir "$MIHOMO_LOCK_DIR" 2>/dev/null || true
         LOCK_HELD=0
     fi
+}
+
+# hev.yaml 凭证与 config.yaml authentication 同步，语义与 transport_manager.sh
+# 的 hev_sync_auth 一致（有 authentication 写首条 user:pass，无则清除）。
+# secret 轮换后若不同步，LAN 暴露下 hev 仍用旧口令拨入会被拒，
+# 而 transport_probe 读 config.yaml 照样报 ok。文件不存在则跳过。
+sync_hev_auth() {
+    [ -f "$HEV_CONF" ] || return 0
+
+    _hev_pair=""
+    if [ -r "$CONFIG_FILE" ]; then
+        _hev_pair="$(awk '
+            /^[[:space:]]*authentication:/ {
+                if ($0 ~ /\[\]/) { exit }
+                in_auth = 1
+                next
+            }
+            in_auth && /^[^[:space:]#-]/ { exit }
+            in_auth && /^[[:space:]]*-[[:space:]]*/ {
+                line = $0
+                sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+                sub(/[[:space:]]+#.*$/, "", line)
+                gsub(/"/, "", line)
+                gsub(/[[:space:]]+$/, "", line)
+                if (line != "") {
+                    print line
+                    exit
+                }
+            }
+        ' "$CONFIG_FILE" 2>/dev/null || true)"
+    fi
+
+    _tmp_hev="$(mktemp "${HEV_CONF}.sync.XXXXXX" 2>/dev/null || true)"
+    [ -n "$_tmp_hev" ] || return 0
+
+    if [ -n "$_hev_pair" ]; then
+        if ! MIHOMO_HEV_AUTH_VAL="$_hev_pair" awk '
+            BEGIN {
+                v = ENVIRON["MIHOMO_HEV_AUTH_VAL"]
+                n = index(v, ":")
+                u = (n > 1) ? substr(v, 1, n - 1) : v
+                p = (n > 1) ? substr(v, n + 1) : ""
+                in5 = 0
+                buf = ""
+                emitted = 0
+            }
+            function flush5() {
+                if (!emitted) {
+                    printf "  username: %s\n  password: %s\n", u, p
+                    emitted = 1
+                }
+                printf "%s", buf
+                buf = ""
+            }
+            /^[^[:space:]]/ {
+                if (in5) {
+                    flush5()
+                }
+                in5 = ($0 ~ /^socks5:/) ? 1 : 0
+                print
+                next
+            }
+            in5 && /^[[:space:]]*(username|password):[[:space:]]*/ { next }
+            in5 {
+                buf = buf $0 "\n"
+                next
+            }
+            { print }
+            END {
+                if (in5) {
+                    flush5()
+                }
+            }
+        ' "$HEV_CONF" > "$_tmp_hev"; then
+            echo "error: failed to sync hev credentials in $HEV_CONF" >&2
+            rm -f "$_tmp_hev"
+            return 1
+        fi
+    else
+        if ! awk '
+            /^[^[:space:]]/ {
+                in5 = ($0 ~ /^socks5:/) ? 1 : 0
+            }
+            in5 && /^[[:space:]]*(username|password):[[:space:]]*/ { next }
+            { print }
+        ' "$HEV_CONF" > "$_tmp_hev"; then
+            echo "error: failed to clear hev credentials in $HEV_CONF" >&2
+            rm -f "$_tmp_hev"
+            return 1
+        fi
+    fi
+
+    chmod 600 "$_tmp_hev" 2>/dev/null || true
+    if cmp -s "$_tmp_hev" "$HEV_CONF"; then
+        rm -f "$_tmp_hev"
+        return 0
+    fi
+    if ! mv -f "$_tmp_hev" "$HEV_CONF"; then
+        echo "error: failed to replace $HEV_CONF after credential sync" >&2
+        rm -f "$_tmp_hev"
+        return 1
+    fi
+    if [ -n "$_hev_pair" ] && ! grep -qF "password: ${_hev_pair#*:}" "$HEV_CONF"; then
+        echo "error: verification failed for hev credential sync in $HEV_CONF" >&2
+        return 1
+    fi
+    return 0
 }
 
 # 新密钥落盘 secret.key 并同步 config.yaml / 订阅模板 / sub/env 三处
@@ -212,6 +326,12 @@ apply_secret_files() {
             rm -f "$_sed_script"
             return 1
         fi
+    fi
+
+    # hev.yaml 凭证同步：必须排在 authentication 联动之后，读到的才是新口令
+    if ! sync_hev_auth; then
+        rm -f "$_sed_script"
+        return 1
     fi
 
     if [ -f "$ENV_FILE" ]; then

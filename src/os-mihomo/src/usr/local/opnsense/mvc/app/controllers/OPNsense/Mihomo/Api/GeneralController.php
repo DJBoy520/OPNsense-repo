@@ -260,8 +260,12 @@ class GeneralController extends ApiMutableModelControllerBase
             return ['result' => 'failed', 'status' => 'failed', 'message' => '仅接受 POST 请求'];
         }
 
-        // 先快照旧值：后续动作只按“实际变化”分发；同时供 apply 失败时模型回滚使用
+        // 先快照旧值：后续动作只按“实际变化”分发；同时供 apply 失败时整棵 general 回滚使用
         $model = $this->getModel();
+        $oldNodes = $model->getNodes();
+        $oldGeneral = (isset($oldNodes['general']) && is_array($oldNodes['general']))
+            ? $oldNodes['general']
+            : [];
         $old = [
             'api_bind' => (string)$model->general->api_bind,
             'api_port' => (string)$model->general->api_port,
@@ -318,17 +322,15 @@ class GeneralController extends ApiMutableModelControllerBase
             $new['api_port'],
         ]));
 
-        // apply 失败 → 回滚模型 + 跳过 enabled=1 的 restart + 返回 failed 并附 stdout 摘要
+        // apply 失败 → 整棵 general 回滚 + 跳过 enabled=1 的 restart + 返回 failed 并附 stdout 摘要
+        // 只回滚 api_bind/api_port 会把 transport_mode 等新值留在 config.xml：重试保存时
+        // 前后模型相同，transport-enable/disable 永不触发，透明层因此永久不挂载。
         if (stripos($applyOutput, 'OK: api bind') === false) {
             try {
                 Config::getInstance()->lock();
                 $rollbackMdl = $this->getModel();
-                $rollbackMdl->setNodes([
-                    'general' => [
-                        'api_bind' => $old['api_bind'],
-                        'api_port' => $old['api_port'],
-                    ]
-                ]);
+                $rollbackGeneral = !empty($oldGeneral) ? $oldGeneral : $old;
+                $rollbackMdl->setNodes(['general' => $rollbackGeneral]);
                 $this->save(false, true);
             } catch (\Exception $e) {
                 // 容错处理
@@ -356,7 +358,14 @@ class GeneralController extends ApiMutableModelControllerBase
         );
 
         // 2) 传输模式切换（先 filter reload 再挂 anchor；关闭时反过来，避免规则引用悬空）
-        if ($old['transport_mode'] !== $new['transport_mode']) {
+        // 运行态与模型双条件：config.xml 可能已落盘新值（例如 apply 失败回滚不完整），
+        // 只比较前后模型会漏掉 enable/disable，导致重试时透明层永不挂载。
+        $transportNeedsApply = ($old['transport_mode'] !== $new['transport_mode']);
+        $runtimeTransportMode = $this->readTransportMode($backend);
+        if (!$transportNeedsApply && $runtimeTransportMode !== '') {
+            $transportNeedsApply = ($runtimeTransportMode !== $new['transport_mode']);
+        }
+        if ($transportNeedsApply) {
             if ($new['transport_mode'] === 'transparent') {
                 $messages[] = $this->runConfigd($backend, 'filter reload');
                 $messages[] = $this->runConfigd($backend, 'mihomo transport-enable');
@@ -379,6 +388,22 @@ class GeneralController extends ApiMutableModelControllerBase
         }
 
         return ['result' => 'saved', 'status' => 'ok', 'messages' => $messages];
+    }
+
+    /**
+     * 读取运行态传输模式（transport-status 的 Mode 行）；无法判定时返回空串。
+     * 与模型前后值共同判定切换：落盘值与运行态不一致时仍要执行 enable/disable。
+     */
+    private function readTransportMode($backend)
+    {
+        $output = (string)$backend->configdRun('mihomo transport-status');
+        if (preg_match('/^Mode:[ \t]*([A-Za-z0-9_-]+)/m', $output, $matches)) {
+            $mode = trim($matches[1]);
+            if ($mode === 'proxy' || $mode === 'transparent') {
+                return $mode;
+            }
+        }
+        return '';
     }
 
     /**
@@ -442,7 +467,21 @@ class GeneralController extends ApiMutableModelControllerBase
                 return 'recompose failed: ' . ($recomposeOutput !== '' ? $recomposeOutput : '未收到合成响应');
             }
         }
-        return trim((string)$backend->configdRun('mihomo reload'));
+        $reloadOutput = trim((string)$backend->configdRun('mihomo reload'));
+        if ($this->isReloadSuccess($reloadOutput)) {
+            /* hev.yaml 仍持有旧凭证：同步失败只记 warning，不阻断已生效的密钥轮换响应。
+               transport_manager.sh hev-sync 成功输出不含 OK（「未运行」也是成功），按错误标记判定。 */
+            try {
+                $syncOutput = trim((string)$backend->configdpRun('mihomo hev-sync'));
+                if ($syncOutput !== '' &&
+                    (stripos($syncOutput, '错误') !== false || stripos($syncOutput, 'error') !== false)) {
+                    syslog(LOG_WARNING, 'mihomo hev-sync failed after secret reload: ' . $syncOutput);
+                }
+            } catch (\Throwable $e) {
+                syslog(LOG_WARNING, 'mihomo hev-sync failed after secret reload: ' . $e->getMessage());
+            }
+        }
+        return $reloadOutput;
     }
 
     /**

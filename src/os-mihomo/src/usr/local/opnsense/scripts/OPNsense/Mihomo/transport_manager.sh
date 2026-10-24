@@ -2,8 +2,9 @@
 set -eu
 
 # transport_manager.sh - 透明代理传输层管理栈
-# 用法：transport_manager.sh {enable|disable|status|recover}
+# 用法：transport_manager.sh {enable|disable|flush|status|recover|hev-sync}
 # 管理 mihomo-transport PF anchor 与 hev-socks5-tunnel (tun0) 状态
+# enable/disable/flush/recover/hev-sync 互斥（mkdir 锁，等待上限 60 秒）
 
 ANCHOR="mihomo-transport"
 MODE_FILE="/var/db/os-mihomo/transport-mode"
@@ -19,6 +20,54 @@ CONF_FILE="/usr/local/etc/mihomo/config.yaml"
 
 TUN_DEV="${MIHOMO_TUN_DEV:-tun0}"
 HEV_PIDFILE="/var/run/mihomo_hev.pid"
+
+# 传输层互斥锁：复用 secret_manager.sh / sub_lib.sh 的 mkdir + pid 协议。
+# disable 与 recover/enable 交错会留下 anchor 已装载但 mode=proxy 的自愈不了残留。
+TRANSPORT_LOCK_DIR="${MIHOMO_TRANSPORT_LOCK_DIR:-/var/run/mihomo-transport.lock}"
+TRANSPORT_LOCK_HELD=0
+TRANSPORT_LOCK_WAIT=60
+
+# 单次尝试占锁；目录已存在时只有持有者 PID 确已消失才按陈旧锁回收
+transport_lock_try() {
+    if mkdir "${TRANSPORT_LOCK_DIR}" 2>/dev/null; then
+        TRANSPORT_LOCK_HELD=1
+        printf '%s\n' "$$" > "${TRANSPORT_LOCK_DIR}/pid" 2>/dev/null || true
+        return 0
+    fi
+    _lock_pid="$(cat "${TRANSPORT_LOCK_DIR}/pid" 2>/dev/null || true)"
+    if [ -n "${_lock_pid}" ] && ! kill -0 "${_lock_pid}" 2>/dev/null; then
+        echo "警告：发现陈旧传输层锁（持有者 PID ${_lock_pid} 已不存在），自动清理后重试。" >&2
+        rm -rf "${TRANSPORT_LOCK_DIR}"
+        if mkdir "${TRANSPORT_LOCK_DIR}" 2>/dev/null; then
+            TRANSPORT_LOCK_HELD=1
+            printf '%s\n' "$$" > "${TRANSPORT_LOCK_DIR}/pid" 2>/dev/null || true
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 锁等待上限 60 秒；超时报错退出，绝不无锁继续
+transport_lock_acquire() {
+    _waited=0
+    while ! transport_lock_try; do
+        if [ "${_waited}" -ge "${TRANSPORT_LOCK_WAIT}" ]; then
+            echo "错误：另一传输层操作正在进行（等待锁 ${TRANSPORT_LOCK_DIR} 超过 ${TRANSPORT_LOCK_WAIT} 秒）" >&2
+            return 1
+        fi
+        sleep 1
+        _waited=$((_waited + 1))
+    done
+    return 0
+}
+
+transport_lock_release() {
+    if [ "${TRANSPORT_LOCK_HELD:-0}" = "1" ]; then
+        rm -f "${TRANSPORT_LOCK_DIR}/pid" 2>/dev/null || true
+        rmdir "${TRANSPORT_LOCK_DIR}" 2>/dev/null || true
+        TRANSPORT_LOCK_HELD=0
+    fi
+}
 
 # 检查当前父进程 SSH 会话是否存活
 # PPID 为 1 (init/launchd) 或 0 时视为存活；否则 kill -0 探测
@@ -418,17 +467,51 @@ do_recover() {
         exit 0
     fi
 
-    # 2. 检查规则数
+    # 2. 健康判据必须三者齐备：hev 进程存活 + tun 设备在 + anchor 有规则。
+    #    只看规则数时，hev 崩溃或 tun0 消失而 anchor 仍挂着，LAN 流量会被
+    #    route-to 送进死接口（transport_probe 走 127.0.0.1 完全看不出来）。
     _cur_rules="$(anchor_rule_count)"
-    if [ "${_cur_rules}" -gt 0 ]; then
+    if [ "${_cur_rules}" -gt 0 ] && hev_running && tun_ready; then
         exit 0
     fi
 
-    # 3. 若 mihomo 健康且 tun 就绪，静默触发 enable 补挂规则
-    if mihomo_healthy && tun_ready; then
+    # 3. tun 消失但 hev 进程仍在：rc.d start 会因 pidfile 存活而短路，无法重建
+    #    tun0，先重启一次 hev，使下面的 enable 一次收敛。
+    if hev_running && ! tun_ready && [ -x "${HEV_RC}" ]; then
+        "${HEV_RC}" restart >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
+    # 4. 三者不齐：mihomo 核心健康就走 enable 补挂（enable 内部会启动 hev、
+    #    重建 tun0 并重新装载 anchor）；核心不健康时保持直连，由 watchdog 处理。
+    if mihomo_healthy; then
         do_enable >/dev/null 2>&1 || true
     fi
 
+    exit 0
+}
+
+# hev-sync 流程：面板/外部轮换 secret 后同步 hev.yaml 凭证。
+# 凭证只在 hev 启动时读取，因此 hev 正在运行就必须重启才生效；未运行只写文件。
+do_hev_sync() {
+    if [ ! -f "${HEV_CONF}" ]; then
+        echo "hev.yaml 不存在，跳过凭证同步（透明代理尚未初始化）"
+        exit 0
+    fi
+    hev_sync_auth || true
+    if ! hev_running; then
+        echo "hev 未运行，凭证已写入 hev.yaml（下次启动生效）"
+        exit 0
+    fi
+    if [ ! -x "${HEV_RC}" ]; then
+        echo "错误：找不到可执行的 ${HEV_RC}，无法重启 hev 使新凭证生效" >&2
+        exit 1
+    fi
+    if ! "${HEV_RC}" restart >/dev/null 2>&1; then
+        echo "错误：hev 凭证已同步但重启失败，当前进程仍使用旧凭证" >&2
+        exit 1
+    fi
+    echo "hev 凭证已同步并重启生效"
     exit 0
 }
 
@@ -469,24 +552,37 @@ do_status() {
     exit 0
 }
 
+# 写操作全程持锁；do_enable 回滚时内部调用 do_disable，锁只在调度层加，
+# 避免嵌套加锁自死锁。status 只读不加锁。
+with_transport_lock() {
+    trap 'transport_lock_release' EXIT INT TERM
+    if ! transport_lock_acquire; then
+        exit 1
+    fi
+    "$@"
+}
+
 case "${1:-status}" in
     enable)
-        do_enable
+        with_transport_lock do_enable
         ;;
     disable)
-        do_disable
+        with_transport_lock do_disable
         ;;
     flush)
-        do_flush
+        with_transport_lock do_flush
         ;;
     status)
         do_status
         ;;
     recover)
-        do_recover
+        with_transport_lock do_recover
+        ;;
+    hev-sync)
+        with_transport_lock do_hev_sync
         ;;
     *)
-        echo "Usage: $0 {enable|disable|flush|status|recover}"
+        echo "Usage: $0 {enable|disable|flush|status|recover|hev-sync}"
         exit 1
         ;;
 esac

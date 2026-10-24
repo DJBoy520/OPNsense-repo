@@ -13,6 +13,7 @@ YFLAG="${2:-}"
 HEV_CONF="/usr/local/etc/xray-proxy/hev-socks5-tunnel.yml"
 ANCHOR_FILE="/usr/local/etc/pf.anchors/xray-proxy"
 CONFIG_FILE="/usr/local/etc/mihomo/config.yaml"
+TRANSPORT_MGR="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh"
 
 # external-controller 端口解析（§2.3）：解析失败按默认 9090 展示
 API_PORT=9090
@@ -49,17 +50,35 @@ confirm() {
 swap_hev_port() {
     _from="$1"
     _to="$2"
+    if [ ! -f "${HEV_CONF}" ]; then
+        echo "ERROR: xray hev 配置不存在: ${HEV_CONF}" >&2
+        return 1
+    fi
     cp -p "${HEV_CONF}" "${HEV_CONF}.bak-rescue-$(date +%H%M%S)"
     sed -i '' "s/^  port: ${_from}$/  port: ${_to}/" "${HEV_CONF}" 2>/dev/null ||
         sed -i "s/^  port: ${_from}$/  port: ${_to}/" "${HEV_CONF}"
+    # sed 无匹配也会以 0 退出；必须回读确认端口确实改了，否则后续 hev 仍指向死端口
+    if ! grep -q "^  port: ${_to}$" "${HEV_CONF}"; then
+        echo "ERROR: 未能在 ${HEV_CONF} 中确认上游端口已改为 ${_to}（原端口 ${_from} 可能不存在），请手工修正；已保留备份。" >&2
+        return 1
+    fi
 }
 
 case "${ACTION}" in
     r0)
         confirm "回退到 xray（mihomo 将停止，代理核心切回 xray:10808）" || exit 1
+        echo "==> 拆除 mihomo 透明代理传输层（只动 mihomo-transport anchor）"
+        if [ -x "$TRANSPORT_MGR" ]; then
+            "$TRANSPORT_MGR" disable >/dev/null 2>&1 || true
+        fi
         echo "==> 停止 mihomo"
         service mihomo stop >/dev/null 2>&1 || true
         pkill -TERM -f '/usr/local/bin/mihomo' 2>/dev/null || true
+        # mihomo-only 机器没有 xray 配置：保留已停止 mihomo 的状态，不碰 hev/tun0/xray
+        if [ ! -f "${HEV_CONF}" ]; then
+            echo "==> xray 配置缺失（${HEV_CONF} 不存在），仅停 mihomo；hev/tun0/xray 未改动。"
+            exit 0
+        fi
         echo "==> hev 上游 7891 → 10808"
         swap_hev_port 7891 10808
         echo "==> 重启 hev 隧道（tun0 重建；hev rc.d pidfile 不可信，tun0 未起则 pkill 兜底重启）"

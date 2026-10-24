@@ -122,13 +122,14 @@ awk '
 ' "$HEV_RC" || fail "mihomo_hev stop does not kill by pidfile"
 echo "  [PASS] mihomo_hev: daemon -p + pidfile kill, no pkill"
 
-# (f) 安装/卸载钩子第一步切断传输层：transport disable 先于任何其他 transport/PF 动作
-echo "--> Test 6: pre-install/pre-deinstall disable transport first..."
+# (f) 安装/卸载钩子第一步切断传输层：transport flush/disable 先于任何其他 transport/PF 动作
+#     （升级前置必须 flush 保留模式意图，卸载前置 disable）
+echo "--> Test 6: pre-install/pre-deinstall tear down transport first..."
 first_transport_action() {
     awk '
         /^[[:space:]]*#/ { next }
         /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=/ { next }
-        /pfctl[[:space:]]|[[:space:]]transport-(enable|disable|status|recover)|transport_manager\.sh"?[[:space:]]+(enable|disable|status|recover)|"\$TRANSPORT_MGR"[[:space:]]+(enable|disable|status|recover)|[[:space:]](hev|mihomo_hev)([[:space:]]|$)/ {
+        /pfctl[[:space:]]|[[:space:]]transport-(enable|disable|flush|status|recover)|transport_manager\.sh"?[[:space:]]+(enable|disable|flush|status|recover)|"\$TRANSPORT_MGR"[[:space:]]+(enable|disable|flush|status|recover)|[[:space:]](hev|mihomo_hev)([[:space:]]|$)/ {
             print NR ":" $0
             exit
         }
@@ -139,10 +140,10 @@ for _pkg_script in "$PRE_INSTALL" "$PRE_DEINSTALL"; do
     _first="$(first_transport_action "$_pkg_script")"
     [ -n "$_first" ] || fail "$(basename "$_pkg_script") has no transport action"
     case "$_first" in
-        *disable*) ;;
-        *) fail "$(basename "$_pkg_script") first transport action is not disable: $_first" ;;
+        *disable*|*flush*) ;;
+        *) fail "$(basename "$_pkg_script") first transport action is not disable/flush: $_first" ;;
     esac
-    echo "  [PASS] $(basename "$_pkg_script") -> transport disable first"
+    echo "  [PASS] $(basename "$_pkg_script") -> transport teardown first"
 done
 
 # (g) fail-open：watchdog 判死不健康时必须清空 anchor（恢复直连，避免 route-to 黑洞）

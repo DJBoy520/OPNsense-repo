@@ -180,20 +180,56 @@ mihomo_lib_strategy_remove() {
 }
 
 # 订阅操作加锁（含陈旧锁自动清理机制）
+# 只按 pid 存活判定会永久锁死：mkdir 成功与写入 pid 之间进程被杀时 pid 文件
+# 不存在，任何持有者都无从判断锁主已死。故 pid 缺失时用锁目录 mtime 超龄兜底。
+MIHOMO_LOCK_STALE_SECS=900
+
 mihomo_lib_lock_acquire() {
     if mkdir "$MIHOMO_LOCK_DIR" 2>/dev/null; then
         LOCK_HELD=1
         printf '%s\n' "$$" > "$MIHOMO_LOCK_DIR/pid" 2>/dev/null || true
         return 0
     fi
+
     _lock_pid="$(cat "$MIHOMO_LOCK_DIR/pid" 2>/dev/null || true)"
-    if [ -n "$_lock_pid" ] && ! kill -0 "$_lock_pid" 2>/dev/null; then
-        echo "警告：发现陈旧锁（持有者 PID $_lock_pid 已不存在），自动清理后重试。" >&2
+    _lock_stale=0
+
+    if [ -n "$_lock_pid" ]; then
+        if ! kill -0 "$_lock_pid" 2>/dev/null; then
+            _lock_stale=1
+        fi
+    else
+        # BSD stat 用 -f %m，GNU stat 用 -c %Y；输出非数字时视为不可判定
+        _lock_mtime="$(stat -f %m "$MIHOMO_LOCK_DIR" 2>/dev/null || true)"
+        case "$_lock_mtime" in
+            ''|*[!0-9]*) _lock_mtime="$(stat -c %Y "$MIHOMO_LOCK_DIR" 2>/dev/null || true)" ;;
+        esac
+        case "$_lock_mtime" in
+            ''|*[!0-9]*) ;;
+            *)
+                if [ "$(( $(date +%s) - _lock_mtime ))" -gt "$MIHOMO_LOCK_STALE_SECS" ]; then
+                    _lock_stale=1
+                fi
+                ;;
+        esac
+    fi
+
+    if [ "$_lock_stale" = "1" ]; then
+        if [ -n "$_lock_pid" ]; then
+            echo "警告：发现陈旧锁（持有者 PID $_lock_pid 已不存在），自动清理后重试。" >&2
+        else
+            echo "警告：发现陈旧锁（无 pid 文件且锁已超过 ${MIHOMO_LOCK_STALE_SECS} 秒），自动清理后重试。" >&2
+        fi
         rm -rf "$MIHOMO_LOCK_DIR"
+        # 回收与重建之间存在 TOCTOU：以本次 mkdir 成功为唯一凭据
         if mkdir "$MIHOMO_LOCK_DIR" 2>/dev/null; then
-            LOCK_HELD=1
             printf '%s\n' "$$" > "$MIHOMO_LOCK_DIR/pid" 2>/dev/null || true
-            return 0
+            # 重建后立即重验：pid 落盘且等于本进程才算持锁成功
+            if [ "$(cat "$MIHOMO_LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+                LOCK_HELD=1
+                return 0
+            fi
+            rmdir "$MIHOMO_LOCK_DIR" 2>/dev/null || true
         fi
     fi
     return 1
@@ -217,19 +253,21 @@ mihomo_lib_mask_url() {
 }
 
 # 提取 proxies 顶层段（含 www.speedtet.net 修正）
+# 起点与终点都必须是列 0 的顶层键：策略组的成员表里也有缩进的 proxies:，
+# 零缩进的序列项（"- name: x"）也不是顶层键，两者都不能当作段边界
 mihomo_lib_extract_proxies() {
     _raw_yaml="${1:-}"
     _out_file="${2:-}"
     [ -f "$_raw_yaml" ] || return 1
     [ -n "$_out_file" ] || return 1
     awk '
-      /^[[:space:]]*proxies[[:space:]]*:/ {
+      in_proxies && /^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/ {
+          exit
+      }
+      /^proxies[ \t]*:/ {
           in_proxies = 1
           print
           next
-      }
-      in_proxies && /^[^[:space:]][^:]*[[:space:]]*:/ {
-          exit
       }
       in_proxies {
           print
@@ -238,6 +276,8 @@ mihomo_lib_extract_proxies() {
 }
 
 # 提取节点名称列表（去重、去引号、转义并格式化为 YAML 项）
+# 名称里可能含逗号（策略组按名字引用，取错即整组失联），所以流式 map 的
+# name 值必须感知引号：取到下一个未加引号的逗号或块尾 } 为止，且不假设字段顺序
 mihomo_lib_extract_names() {
     _names_proxies_file="${1:-}"
     _names_out_file="${2:-}"
@@ -265,22 +305,54 @@ mihomo_lib_extract_names() {
               print "      - \"" s "\""
           }
       }
+      function flow_name(line,   n, i, ch, out, q) {
+          if (!match(line, /[{,][ \t]*name[ \t]*:[ \t]*/)) return ""
+          line = substr(line, RSTART + RLENGTH)
+          n = length(line)
+          out = ""
+          q = ""
+          for (i = 1; i <= n; i++) {
+              ch = substr(line, i, 1)
+              if (q != "") {
+                  # 引号内：反斜杠转义连同下一字符一起吞掉
+                  if (ch == "\\") {
+                      out = out ch
+                      if (i < n) {
+                          i++
+                          out = out substr(line, i, 1)
+                      }
+                      continue
+                  }
+                  out = out ch
+                  if (ch == q) q = ""
+                  continue
+              }
+              if (ch == "\"" || ch == "\047") {
+                  q = ch
+                  out = out ch
+                  continue
+              }
+              if (ch == "," || ch == "}") break
+              out = out ch
+          }
+          return out
+      }
       /^[[:space:]]*-[[:space:]]*\{/ {
-          line = $0
-          sub(/^[[:space:]]*-[[:space:]]*\{[[:space:]]*name:[[:space:]]*/, "", line)
-          sub(/[[:space:]]*,[[:space:]]*server:.*/, "", line)
-          emit(line)
+          line = flow_name($0)
+          if (line != "") emit(line)
           next
       }
       /^[[:space:]]*-[[:space:]]*name[[:space:]]*:/ {
           line = $0
           sub(/^[[:space:]]*-[[:space:]]*name[[:space:]]*:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+#.*$/, "", line)
           emit(line)
           next
       }
       /^[[:space:]]*name[[:space:]]*:/ {
           line = $0
           sub(/^[[:space:]]*name[[:space:]]*:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+#.*$/, "", line)
           emit(line)
           next
       }
@@ -288,6 +360,7 @@ mihomo_lib_extract_names() {
 }
 
 # 统计 proxies 中的节点数量
+# 段边界判据必须与 extract_proxies 一致：零缩进序列项（"- name: x"）属于段内
 mihomo_lib_count_nodes() {
     _proxies_file="${1:-}"
     if [ ! -f "$_proxies_file" ]; then
@@ -296,9 +369,9 @@ mihomo_lib_count_nodes() {
     fi
     awk '
       BEGIN { count = 0 }
-      /^[[:space:]]*proxies[[:space:]]*:/ { in_proxies = 1; next }
-      in_proxies && /^[^[:space:]]/ { in_proxies = 0 }
-      in_proxies && /^[[:space:]]*-[[:space:]]/ { count++ }
+      in_proxies == 1 && /^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/ { in_proxies = 0 }
+      /^proxies[ \t]*:/ { in_proxies = 1; next }
+      in_proxies == 1 && /^[[:space:]]*-[[:space:]]/ { count++ }
       END { print count }
     ' "$_proxies_file" | tr -d ' '
 }
