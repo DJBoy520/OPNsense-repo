@@ -13,3 +13,10 @@ if [ -d /usr/local/etc/mihomo ]; then
     mv /usr/local/etc/mihomo "/root/os-mihomo-removed-$$"
 fi
 rm -f /root/os-mihomo-install-warning.log
+
+# 卸载卫生：清掉 pkg 不拥有的运行时 drop-in 与残留，防孤儿 cron / 幽灵服务
+# （pkg delete 只删 manifest 内文件；以下均为运行时生成，必须显式清理）
+rm -f /etc/cron.d/os-mihomo
+rm -f /etc/rc.conf.d/mihomo_hev
+rm -rf /usr/local/opnsense/scripts/OPNsense/Mihomo/__pycache__
+service cron restart >/dev/null 2>&1 || true

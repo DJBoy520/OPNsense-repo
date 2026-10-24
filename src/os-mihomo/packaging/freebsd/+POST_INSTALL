@@ -73,7 +73,7 @@ rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cac
 rm -rf /tmp/opnsense_template_cache 2>/dev/null || true
 
 # ---- Step 2.5: upgrade migration & reconcile before restart ----
-php -r '$db=$argv[1];$dp=$argv[2];$y=@file_get_contents("/usr/local/etc/mihomo/config.yaml");if($y&&preg_match("/^external-controller:[[:space:]]*[\x22\x27]?([^:\x22\x27[:space:]]+):([0-9]+)/m",$y,$m)){$yb=trim($m[1]);$yp=trim($m[2]);$c=@simplexml_load_file("/conf/config.xml");if($c){$mbNodes=$c->xpath("//OPNsense/mihomo/general/api_bind");$mb=!empty($mbNodes)?(string)$mbNodes[0]:$db;$mpNodes=$c->xpath("//OPNsense/mihomo/general/api_port");$mp=!empty($mpNodes)?(string)$mpNodes[0]:$dp;if($mb===$db&&$mp===$dp&&($yb!==$db||$yp!==$dp)){$doc=new DOMDocument();if($doc->load("/conf/config.xml")){$xp=new DOMXPath($doc);$gen=$xp->query("/opnsense/OPNsense/mihomo/general")->item(0);if($gen instanceof DOMElement){foreach(["api_bind"=>$yb,"api_port"=>$yp] as $k=>$v){$el=$xp->query("./".$k,$gen)->item(0);if($el instanceof DOMElement){$el->nodeValue=$v;}else{$gen->appendChild($doc->createElement($k,$v));}}$tmp="/conf/config.xml.os-mihomo-mig.tmp";if($doc->save($tmp)!==false){chmod($tmp,0640);rename($tmp,"/conf/config.xml");}}}}}}' -- "$DEFAULT_API_BIND" "$DEFAULT_API_PORT" >/dev/null 2>&1 || true
+/usr/local/bin/php -r '$db=$argv[1];$dp=$argv[2];$y=@file_get_contents("/usr/local/etc/mihomo/config.yaml");if($y&&preg_match("/^external-controller:[[:space:]]*[\x22\x27]?([^:\x22\x27[:space:]]+):([0-9]+)/m",$y,$m)){$yb=trim($m[1]);$yp=trim($m[2]);$c=@simplexml_load_file("/conf/config.xml");if($c){$mbNodes=$c->xpath("//OPNsense/mihomo/general/api_bind");$mb=!empty($mbNodes)?(string)$mbNodes[0]:$db;$mpNodes=$c->xpath("//OPNsense/mihomo/general/api_port");$mp=!empty($mpNodes)?(string)$mpNodes[0]:$dp;if($mb===$db&&$mp===$dp&&($yb!==$db||$yp!==$dp)){$doc=new DOMDocument();if($doc->load("/conf/config.xml")){$xp=new DOMXPath($doc);$gen=$xp->query("/opnsense/OPNsense/mihomo/general")->item(0);if($gen instanceof DOMElement){foreach(["api_bind"=>$yb,"api_port"=>$yp] as $k=>$v){$el=$xp->query("./".$k,$gen)->item(0);if($el instanceof DOMElement){$el->nodeValue=$v;}else{$gen->appendChild($doc->createElement($k,$v));}}$tmp="/conf/config.xml.os-mihomo-mig.tmp";if($doc->save($tmp)!==false){chmod($tmp,0640);rename($tmp,"/conf/config.xml");}}}}}}' -- "$DEFAULT_API_BIND" "$DEFAULT_API_PORT" >/dev/null 2>&1 || true
 
 if [ -f /usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh ]; then
     sh /usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh reconcile || echo "WARNING: api_bind reconcile failed before restart." >&2
@@ -86,7 +86,7 @@ echo "===> Starting mihomo (socks-core, no TUN, no DNS changes)"
 service mihomo restart >/dev/null 2>&1 || true
 
 # ---- Step 3: health gate ----
-_xml_addr=$(php -r '$c=@simplexml_load_file("/conf/config.xml");if($c){$b=$c->xpath("//OPNsense/mihomo/general/api_bind");$p=$c->xpath("//OPNsense/mihomo/general/api_port");$bs=!empty($b)?trim((string)$b[0]):"";$ps=!empty($p)?trim((string)$p[0]):"";echo $bs . " " . $ps;}' 2>/dev/null || true)
+_xml_addr=$(/usr/local/bin/php -r '$c=@simplexml_load_file("/conf/config.xml");if($c){$b=$c->xpath("//OPNsense/mihomo/general/api_bind");$p=$c->xpath("//OPNsense/mihomo/general/api_port");$bs=!empty($b)?trim((string)$b[0]):"";$ps=!empty($p)?trim((string)$p[0]):"";echo $bs . " " . $ps;}' 2>/dev/null || true)
 _target_bind=$(echo "$_xml_addr" | cut -d' ' -f1)
 _target_port=$(echo "$_xml_addr" | cut -d' ' -f2)
 if [ -z "$_target_port" ] || ! echo "$_target_port" | grep -Eq '^[0-9]+$'; then
@@ -131,12 +131,22 @@ else
 fi
 
 # ---- Step 4: 按模型幂等重挂传输层（仅当模型 transport_mode=transparent 且健康门禁通过） ----
-if [ "$HEALTH_OK" -eq 1 ] && [ -x "$CONF_DIR/../opnsense/scripts/OPNsense/Mihomo/transport_manager.sh" ]; then
-    _MODE=$(php -r '$c=@simplexml_load_file("/conf/config.xml"); $m=$c?$c->xpath("//OPNsense/mihomo/general/transport_mode"):array(); echo (string)(isset($m[0])?$m[0]:"proxy");' 2>/dev/null || echo proxy)
+# 注意守卫路径必须写全 /usr/local/opnsense/...：$CONF_DIR/../opnsense 会展开成
+# 不存在的 /usr/local/etc/opnsense，导致 transparent 升级后传输层静默不重挂。
+if [ "$HEALTH_OK" -eq 1 ] && [ -x /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh ]; then
+    _MODE=$(/usr/local/bin/php -r '$c=@simplexml_load_file("/conf/config.xml"); $m=$c?$c->xpath("//OPNsense/mihomo/general/transport_mode"):array(); echo (string)(isset($m[0])?$m[0]:"proxy");' 2>/dev/null || echo proxy)
     if [ "$_MODE" = "transparent" ]; then
         echo "===> Re-enabling transparent transport (model mode: transparent)"
         /usr/local/opnsense/scripts/OPNsense/Mihomo/transport_manager.sh enable || echo "WARNING: transport enable failed; system stays in plain proxy mode (DIRECT LAN unaffected)." >&2
     fi
+fi
+
+# ---- Step 5: watchdog cron 自举（fail-open 安全网自安装起生效） ----
+# 订阅自动更新节律仍由订阅设置保存时重写；这里只保证每分钟 watchdog 兜底在场，
+# 否则全新安装未保存订阅前 transparent 模式核心死亡会导致 LAN 无自动旁路。
+# 注意：manifest 内嵌禁止反斜杠续行，php 命令必须单行。
+if [ -x /usr/local/bin/php ] && [ -f /usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php ]; then
+    /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/Mihomo/mihomo_setup.php --cron-only 0 o24h > /dev/null 2>&1 || echo "WARNING: watchdog cron bootstrap failed; fail-open safety net inactive until subscription save." >&2
 fi
 
 # 一键安装钩子：pkg 会把调用方环境传给本脚本，带 MIHOMO_SETUP_URL 即装即部署
