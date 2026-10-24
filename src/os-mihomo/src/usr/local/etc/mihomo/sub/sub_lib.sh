@@ -539,6 +539,10 @@ mihomo_lib_compose() {
               print
               in_lan_ips = 1
               if (lan_net != "") {
+                  # fixB: 透明传输层 hev 固定从 127.0.0.1 拨入 mihomo，
+                  # 收窄白名单时回环必须始终保留，否则透明代理被 ACL 静默掐断
+                  print "  - 127.0.0.1/32"
+                  print "  - ::1/128"
                   print "  - " lan_net
               }
               next

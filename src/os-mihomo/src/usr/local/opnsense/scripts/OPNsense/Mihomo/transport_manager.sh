@@ -9,6 +9,7 @@ ANCHOR="mihomo-transport"
 MODE_FILE="/var/db/os-mihomo/transport-mode"
 PF_TEMPLATE="/usr/local/etc/mihomo/pf-transport.conf"
 RENDER="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_render.php"
+PROBE="/usr/local/opnsense/scripts/OPNsense/Mihomo/transport_probe.php"
 ACTIVE="/var/db/os-mihomo/pf-transport.active.conf"
 HEV_RC="/usr/local/etc/rc.d/mihomo_hev"
 HEV_CONF="/usr/local/etc/mihomo/hev.yaml"
@@ -106,6 +107,102 @@ tun_ready() {
     ifconfig "${TUN_DEV}" >/dev/null 2>&1
 }
 
+# hev.yaml 与 config.yaml authentication 双向同步（fixB）
+# config.yaml 存在 authentication → 首条 "user:pass" 写入 hev.yaml socks5.username/password
+# config.yaml 无 authentication → 清除 hev.yaml 中的 username/password
+# （hev 固定从 127.0.0.1 拨入 mihomo，两侧凭证不一致会被 ACL/鉴权静默掐断）
+# 返回 0=hev.yaml 未变化，1=已更新（调用方据此重启 hev）
+hev_sync_auth() {
+    [ -f "${HEV_CONF}" ] || return 0
+
+    _auth_pair=""
+    if [ -r "${CONF_FILE}" ]; then
+        _auth_pair="$(awk '
+            /^[[:space:]]*authentication:/ {
+                if ($0 ~ /\[\]/) { exit }
+                in_auth = 1
+                next
+            }
+            in_auth && /^[^[:space:]#-]/ { exit }
+            in_auth && /^[[:space:]]*-[[:space:]]*/ {
+                line = $0
+                sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+                sub(/[[:space:]]+#.*$/, "", line)
+                gsub(/"/, "", line)
+                gsub(/[[:space:]]+$/, "", line)
+                if (line != "") {
+                    print line
+                    exit
+                }
+            }
+        ' "${CONF_FILE}" 2>/dev/null || true)"
+    fi
+
+    _tmp_hev="$(mktemp "${HEV_CONF}.sync.XXXXXX" 2>/dev/null || true)"
+    [ -n "${_tmp_hev}" ] || return 0
+
+    if [ -n "${_auth_pair}" ]; then
+        # fixB-awk-inject-begin
+        MIHOMO_HEV_AUTH_VAL="${_auth_pair}" awk '
+            BEGIN {
+                v = ENVIRON["MIHOMO_HEV_AUTH_VAL"]
+                n = index(v, ":")
+                u = (n > 1) ? substr(v, 1, n - 1) : v
+                p = (n > 1) ? substr(v, n + 1) : ""
+                in5 = 0
+                buf = ""
+                emitted = 0
+            }
+            function flush5() {
+                if (!emitted) {
+                    printf "  username: %s\n  password: %s\n", u, p
+                    emitted = 1
+                }
+                printf "%s", buf
+                buf = ""
+            }
+            /^[^[:space:]]/ {
+                if (in5) {
+                    flush5()
+                }
+                in5 = ($0 ~ /^socks5:/) ? 1 : 0
+                print
+                next
+            }
+            in5 && /^[[:space:]]*(username|password):[[:space:]]*/ { next }
+            in5 {
+                buf = buf $0 "\n"
+                next
+            }
+            { print }
+            END {
+                if (in5) {
+                    flush5()
+                }
+            }
+        ' "${HEV_CONF}" > "${_tmp_hev}" || { rm -f "${_tmp_hev}"; return 0; }
+        # fixB-awk-inject-end
+    else
+        # fixB-awk-strip-begin
+        awk '
+            /^[^[:space:]]/ {
+                in5 = ($0 ~ /^socks5:/) ? 1 : 0
+            }
+            in5 && /^[[:space:]]*(username|password):[[:space:]]*/ { next }
+            { print }
+        ' "${HEV_CONF}" > "${_tmp_hev}" || { rm -f "${_tmp_hev}"; return 0; }
+        # fixB-awk-strip-end
+    fi
+
+    if cmp -s "${_tmp_hev}" "${HEV_CONF}"; then
+        rm -f "${_tmp_hev}"
+        return 0
+    fi
+    chmod 600 "${_tmp_hev}" 2>/dev/null || true
+    mv -f "${_tmp_hev}" "${HEV_CONF}"
+    return 1
+}
+
 # 渲染并校验 PF 规则集
 render_rules() {
     if [ ! -x "${PHP}" ] || [ ! -f "${RENDER}" ]; then
@@ -198,6 +295,16 @@ do_enable() {
     # 步骤 1：记录模式意图为 transparent（原子写入）
     set_mode "transparent"
 
+    # 步骤 1.5：hev.yaml 凭证与 config.yaml authentication 同步（fixB，幂等）。
+    # 覆盖 restart/恢复路径：hev 已在运行而凭证过期（secret 轮换、重组后）时，
+    # 重启 hev 使同步后的凭证生效；tun0 随之重建，由下方全流程重新等待就绪。
+    _hev_changed=0
+    hev_sync_auth || _hev_changed=1
+    if [ "${_hev_changed}" = "1" ] && hev_running; then
+        "${HEV_RC}" restart >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
     # 步骤 2：幂等短路检查
     _cur_rules="$(anchor_rule_count)"
     if [ "${_cur_rules}" -gt 0 ] && hev_running && tun_ready; then
@@ -221,6 +328,9 @@ do_enable() {
             exit 1
         fi
     fi
+
+    # fixB：hev.yaml 就绪后同步凭证（覆盖全新安装路径：sample 装入后立刻回写）
+    hev_sync_auth || true
 
     kldload if_tun 2>/dev/null || true
 
@@ -348,6 +458,14 @@ do_status() {
     printf "Anchor rules: %s\n" "${_rule_cnt}"
     printf "HEV PID: %s\n" "${_hev_pid}"
     printf "TUN (%s): %s\n" "${TUN_DEV}" "${_tun_status}"
+
+    # 端到端数据面探针（fixB）：组件全绿 ≠ 链路可用（ACL/鉴权掐断时上方仍全绿）。
+    # hev 与 LAN 客户端共用 127.0.0.1:7891 入口，探针通过即代表 ACL/鉴权/核心全通。
+    _probe_out=""
+    if [ -x "${PHP}" ] && [ -f "${PROBE}" ]; then
+        _probe_out="$("${PHP}" "${PROBE}" 2>/dev/null || true)"
+    fi
+    printf "%s\n" "${_probe_out:-SOCKS probe: unknown (probe unavailable)}"
     exit 0
 }
 

@@ -15,6 +15,9 @@ socks5:
   address: 127.0.0.1
   port: 7891
   udp: 'udp'
+  # username/password 由 transport_manager.sh 依 config.yaml authentication
+  # 自动双向同步（fixB）：勿手工维护。mihomo 未启用 authentication 时此处
+  # 必须无凭证，否则 SOCKS5 方法协商失败、透明链路被静默掐断。
 misc:
   log-file: /var/log/mihomo_hev.log
   log-level: warn
