@@ -45,15 +45,19 @@ pass "ProxiesController.php structure verified"
 echo "--> Test 3: Menu.xml and ACL.xml registration..."
 grep -q '<Proxies VisibleName="策略组" order="30" url="/ui/mihomo/proxies"/>' "$MENU_FILE" || \
     fail "Menu.xml must contain Proxies order 30 with url /ui/mihomo/proxies"
-grep -q '<Status VisibleName="运行状态" order="40"' "$MENU_FILE" || \
-    fail "Menu.xml Status order must be shifted to 40"
+if grep -q '<Status VisibleName=' "$MENU_FILE"; then
+    fail "Menu.xml must not keep 运行状态 entry（已并入常规设置概览）"
+fi
 grep -q '<Logs VisibleName="实时日志" order="50"' "$MENU_FILE" || \
-    fail "Menu.xml Logs order must be shifted to 50"
+    fail "Menu.xml Logs order must be 50"
 
 # ACL 独立节点与 pattern
 grep -q '<page-services-mihomo-proxies>' "$ACL_FILE" || fail "ACL.xml missing independent <page-services-mihomo-proxies>"
 grep -q '<pattern>ui/mihomo/proxies\*</pattern>' "$ACL_FILE" || fail "ACL.xml missing pattern ui/mihomo/proxies*"
 grep -q '<pattern>api/mihomo/proxies/\*</pattern>' "$ACL_FILE" || fail "ACL.xml missing pattern api/mihomo/proxies/*"
+awk '/<page-services-mihomo-proxies>/,/<\/page-services-mihomo-proxies>/' "$ACL_FILE" | \
+    grep -q '<pattern>api/mihomo/status/\*</pattern>' || \
+    fail "ACL.xml proxies group must allow api/mihomo/status/* (内核模式徽章)"
 pass "Menu.xml and ACL.xml configured correctly"
 
 # 4. API 控制器契约与安全红线 (Api/ProxiesController.php)
@@ -109,9 +113,11 @@ pass "Api/ProxiesController.php security & contract assertions passed"
 echo "--> Test 5: proxies.volt layout, classes, and rendering..."
 grep -q "mihomo-proxy-layout" "$VIEW_FILE" || fail "proxies.volt missing mihomo-proxy-layout"
 grep -q "mihomo-group-list" "$VIEW_FILE" || fail "proxies.volt missing mihomo-group-list"
-grep -q "mihomo-node-grid" "$VIEW_FILE" || fail "proxies.volt missing mihomo-node-grid"
+grep -q "mihomo-node-list" "$VIEW_FILE" || fail "proxies.volt missing mihomo-node-list（紧凑行列表）"
 grep -q "btn_refresh_proxies" "$VIEW_FILE" || fail "proxies.volt missing #btn_refresh_proxies"
-grep -q "group_search_input" "$VIEW_FILE" || fail "proxies.volt missing group_search_input"
+if grep -q "group_search_input" "$VIEW_FILE"; then
+    fail "proxies.volt must not keep group_search_input（搜索策略组已按需求移除）"
+fi
 grep -q "node_search_input" "$VIEW_FILE" || fail "proxies.volt missing node_search_input"
 grep -q "inFlight" "$VIEW_FILE" || fail "proxies.volt missing inFlight guard"
 grep -q "requestSeq" "$VIEW_FILE" || fail "proxies.volt missing requestSeq sequence guard"

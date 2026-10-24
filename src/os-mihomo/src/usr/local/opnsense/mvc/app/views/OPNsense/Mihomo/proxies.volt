@@ -51,22 +51,17 @@
                 </button>
             </div>
 
-            <!-- 主内容区域：两栏布局 -->
+            <!-- 主内容区域：左窄右宽，右侧节点多列铺满 -->
             <div class="row mihomo-proxy-layout" id="proxies_main_content">
                 <!-- 左栏：组列表 -->
-                <div class="col-xs-12 col-md-4" style="margin-bottom: 15px;">
-                    <div style="margin-bottom: 8px;">
-                        <input type="text" class="form-control input-sm" id="group_search_input" placeholder="{{ lang._('搜索策略组...') }}">
-                    </div>
-                    <div style="max-height: 600px; overflow-y: auto;">
-                        <ul class="mihomo-group-list" id="group_list_container">
-                            <li class="mihomo-empty">{{ lang._('暂无策略组数据') }}</li>
-                        </ul>
-                    </div>
+                <div class="col-xs-12 col-md-3" style="margin-bottom: 15px;">
+                    <ul class="mihomo-group-list" id="group_list_container">
+                        <li class="mihomo-empty">{{ lang._('暂无策略组数据') }}</li>
+                    </ul>
                 </div>
 
-                <!-- 右栏：节点卡片与分页 -->
-                <div class="col-xs-12 col-md-8">
+                <!-- 右栏：节点行列表与分页 -->
+                <div class="col-xs-12 col-md-9">
                     <!-- 当前组概览与操作栏 -->
                     <div style="background-color: #fafafa; border: 1px solid #e3e3e3; border-radius: 6px; padding: 12px 16px; margin-bottom: 15px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
@@ -100,8 +95,8 @@
                         </div>
                     </div>
 
-                    <!-- 节点网格卡片容器 -->
-                    <div class="mihomo-node-grid" id="node_grid_container" style="min-height: 200px;">
+                    <!-- 节点紧凑行列表容器 -->
+                    <div class="mihomo-node-list" id="node_grid_container">
                         <div class="mihomo-empty" style="grid-column: 1 / -1;">{{ lang._('请选择左侧策略组查看节点') }}</div>
                     </div>
                 </div>
@@ -216,15 +211,11 @@ $(document).ready(function () {
     }
 
     function renderGroupList() {
-        var filter = $.trim($('#group_search_input').val()).toLowerCase();
         var $list = $('#group_list_container');
         $list.empty();
 
         var renderedCount = 0;
         $.each(groupsCache, function (idx, grp) {
-            if (filter !== '' && grp.name.toLowerCase().indexOf(filter) === -1) {
-                return;
-            }
             renderedCount++;
 
             var $item = $('<li class="mihomo-group-item"></li>');
@@ -232,14 +223,14 @@ $(document).ready(function () {
                 $item.addClass('is-active');
             }
 
-            var $head = $('<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;"></div>');
-            var $title = $('<span style="font-size: 14px; font-weight: 600; color: #333333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;"></span>').text(grp.name);
-            var $badge = $('<span class="label label-default" style="font-size: 10px; padding: 2px 5px;"></span>').text(grp.type);
+            var $head = $('<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px;"></div>');
+            var $title = $('<span style="font-size: 14px; font-weight: 600; color: #333333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0;"></span>').text(grp.name);
+            var $badge = $('<span class="label label-default" style="font-size: 10px; padding: 2px 5px; flex-shrink: 0;"></span>').text(grp.type);
             $head.append($title).append($badge);
 
-            var $foot = $('<div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #777777;"></div>');
-            var $now = $('<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px;"></span>').text(grp.now || '-');
-            var $cnt = $('<span class="badge" style="font-size: 10px; background-color: #eeeeee; color: #666666;"></span>').text(grp.count);
+            var $foot = $('<div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #777777; gap: 8px;"></div>');
+            var $now = $('<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0;"></span>').text(grp.now || '-');
+            var $cnt = $('<span class="badge" style="font-size: 10px; background-color: #eeeeee; color: #666666; flex-shrink: 0;"></span>').text(grp.count);
             $foot.append($now).append($cnt);
 
             $item.append($head).append($foot);
@@ -331,40 +322,37 @@ $(document).ready(function () {
             return;
         }
 
+        /* 紧凑行：名称（当前节点打勾） + 类型 + 延迟，多列铺满，无需滚动逐个看卡片 */
         $.each(nodes, function (idx, node) {
-            var $card = $('<div class="mihomo-node"></div>');
+            var $row = $('<div class="mihomo-node"></div>');
             if (node.current) {
-                $card.addClass('is-current');
+                $row.addClass('is-current');
             }
             if (!activeGroupSelectable) {
-                $card.addClass('is-disabled');
+                $row.addClass('is-disabled');
             }
 
-            var $head = $('<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;"></div>');
-            var $title = $('<div style="font-size: 13px; font-weight: 600; color: #333333; word-break: break-all; margin-right: 6px;"></div>').text(node.name);
-            $head.append($title);
-
+            var $name = $('<span class="mihomo-node-name"></span>').text(node.name).attr('title', node.name);
             if (node.current) {
-                var $currTag = $('<span class="label label-warning" style="font-size: 10px; padding: 2px 4px; white-space: nowrap;"><i class="fa fa-check"></i> 当前</span>');
-                $head.append($currTag);
+                $name.prepend($('<i class="fa fa-check"></i>'));
+                $row.attr('title', '{{ lang._("当前使用中的节点") }}');
+            } else if (activeGroupSelectable) {
+                $row.attr('title', '{{ lang._("点击切换到该节点") }}');
             }
 
-            var $foot = $('<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;"></div>');
-            var $type = $('<span class="label label-default" style="font-size: 10px; padding: 1px 4px;"></span>').text(node.type);
-
+            var $type = $('<span class="mihomo-node-type"></span>').text(node.type);
             var delayInfo = formatDelay(node.delay);
             var $delay = $('<span class="mihomo-delay ' + delayInfo.className + '"></span>').text(delayInfo.text);
-            $foot.append($type).append($delay);
 
-            $card.append($head).append($foot);
+            $row.append($name).append($type).append($delay);
 
             if (activeGroupSelectable && !node.current) {
-                $card.on('click', function () {
+                $row.on('click', function () {
                     confirmAndSelectNode(activeGroupName, node.name);
                 });
             }
 
-            $grid.append($card);
+            $grid.append($row);
         });
     }
 
@@ -425,10 +413,6 @@ $(document).ready(function () {
             nodeOffset += nodeLimit;
             loadNodes();
         }
-    });
-
-    $('#group_search_input').on('input', function () {
-        renderGroupList();
     });
 
     $('#node_search_input').on('input', function () {

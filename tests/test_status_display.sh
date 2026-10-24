@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-# os-mihomo 状态页传输层与内核运行时模式显示语义测试
+# os-mihomo 状态传输层与内核运行时模式显示语义测试
+# 运行状态独立页已在 1.3.0 后下线，显示语义由常规设置页「概览」Tab 承载
 # 从仓库根运行：sh tests/test_status_display.sh
 
 echo "===> Running status display semantic tests..."
@@ -11,6 +12,8 @@ ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 STATUS_PY="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py"
 STATUS_VOLT="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/status.volt"
+INDEX_VOLT="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/index.volt"
+PAGE_CTRL="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/StatusController.php"
 STATUS_CTRL="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/Api/StatusController.php"
 SVC_MGR="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
 
@@ -30,9 +33,20 @@ pass() {
 }
 
 [ -f "$STATUS_PY" ] || fail "missing system_status.py"
-[ -f "$STATUS_VOLT" ] || fail "missing status.volt"
-[ -f "$STATUS_CTRL" ] || fail "missing StatusController.php"
+[ -f "$INDEX_VOLT" ] || fail "missing index.volt"
+[ -f "$STATUS_CTRL" ] || fail "missing Api/StatusController.php"
 [ -f "$SVC_MGR" ] || fail "missing service_manager.sh"
+
+# 运行状态独立页已下线：模板与页面级控制器都不应再存在
+if [ -e "$STATUS_VOLT" ]; then
+    fail "status.volt must be removed (运行状态已并入常规设置概览)"
+fi
+if [ -e "$PAGE_CTRL" ]; then
+    fail "页面级 StatusController.php must be removed (菜单项已下线)"
+fi
+if grep -q '<Status VisibleName=' "$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/models/OPNsense/Mihomo/Menu/Menu.xml"; then
+    fail "Menu.xml must not keep the 运行状态 entry"
+fi
 
 # ---------------------------------------------------------------------------
 echo "--> Test 1: Python 编译测试（拷贝至 /tmp 编译，严禁在 src 树内跑 python）..."
@@ -58,52 +72,52 @@ grep -q 'tun_kind' "$STATUS_PY" || fail "system_status.py missing tun_kind in ou
 pass "system_status.py contains TRANSPORT_MODE_FILE, HEV_TUN_DEVICE, UP+RUNNING logic, and new schema fields"
 
 # ---------------------------------------------------------------------------
-echo "--> Test 3: status.volt 静态断言..."
-# MODE 徽章：接入：透明代理 与 接入：仅代理 分支
-grep -q 'data\.transport_mode === .transparent.' "$STATUS_VOLT" || \
-    fail "status.volt missing data.transport_mode === 'transparent' branch"
-grep -q '接入：透明代理' "$STATUS_VOLT" || \
-    fail "status.volt missing '接入：透明代理' badge"
-grep -q '接入：仅代理' "$STATUS_VOLT" || \
-    fail "status.volt missing '接入：仅代理' badge"
-grep -q '接入：直连' "$STATUS_VOLT" || \
-    fail "status.volt missing '接入：直连' badge"
+echo "--> Test 3: 概览 Tab（index.volt）显示语义断言..."
+# 接入方式徽章：透明代理 / 仅代理 / 直连 三分支
+grep -q 'data\.transport_mode === .transparent.' "$INDEX_VOLT" || \
+    fail "index.volt missing data.transport_mode === 'transparent' branch"
+grep -q '透明代理' "$INDEX_VOLT" || \
+    fail "index.volt missing 透明代理 badge"
+grep -q '仅代理' "$INDEX_VOLT" || \
+    fail "index.volt missing 仅代理 badge"
+grep -q '直连' "$INDEX_VOLT" || \
+    fail "index.volt missing 直连 badge"
 
-# TUN 徽章：UP/DOWN/SOCKS 三态且 SOCKS 不带 label-danger
-grep -q "data\.tun_status === 'UP'" "$STATUS_VOLT" || \
-    fail "status.volt missing data.tun_status === 'UP' check"
-grep -q "data\.tun_status === 'DOWN'" "$STATUS_VOLT" || \
-    fail "status.volt missing data.tun_status === 'DOWN' check"
-grep -q "'SOCKS'" "$STATUS_VOLT" || \
-    fail "status.volt missing 'SOCKS' display"
+# TUN 三态：UP / DOWN / SOCKS（SOCKS 走 label-default，不得标红）
+grep -q "data\.tun_status === 'UP'" "$INDEX_VOLT" || \
+    fail "index.volt missing data.tun_status === 'UP' check"
+grep -q "data\.tun_status === 'DOWN'" "$INDEX_VOLT" || \
+    fail "index.volt missing data.tun_status === 'DOWN' check"
+grep -q "other: { text: 'SOCKS', cls: 'label-default' }" "$INDEX_VOLT" || \
+    fail "index.volt SOCKS branch must use label-default"
+grep -q "id=\"ov_tun\"" "$INDEX_VOLT" || fail "index.volt missing #ov_tun"
+grep -q "id=\"ov_api\"" "$INDEX_VOLT" || fail "index.volt missing #ov_api"
 
-# 确保 SOCKS 分支不添加 label-danger
-awk '
-    /data\.tun_status === .DOWN./ { in_down = 1; next }
-    in_down && /else/ { in_socks = 1; in_down = 0; next }
-    in_socks && /\}/ { in_socks = 0 }
-    in_socks && /label-danger/ { print "FAIL: SOCKS branch has label-danger"; exit 1 }
-' "$STATUS_VOLT" || fail "status.volt SOCKS branch must not contain label-danger"
-
-# 副标题必须已删除
-if grep -q "核心生命周期" "$STATUS_VOLT"; then
-    fail "status.volt must not contain '核心生命周期' subtitle (R1)"
+# 服务未运行不得沿用 danger 语义显示 SOCKS 模式
+if grep -q "核心生命周期" "$INDEX_VOLT"; then
+    fail "index.volt must not contain '核心生命周期' subtitle (R1)"
 fi
 
-# 新增元素与 ID 断言
-grep -q 'id="core_mode_select"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_select"
-grep -q 'id="btn_core_mode_apply"' "$STATUS_VOLT" || fail "status.volt missing #btn_core_mode_apply"
-grep -q 'id="core_mode_msg"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_msg"
-grep -q 'id="core_mode_config"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_config"
-grep -q '配置默认' "$STATUS_VOLT" || fail "status.volt missing '配置默认' label"
-grep -q '内核模式' "$STATUS_VOLT" || fail "status.volt missing '内核模式' label"
+# 内核模式运行时控件（原状态页能力并入概览）
+grep -q 'id="ov_core_mode_select"' "$INDEX_VOLT" || fail "index.volt missing #ov_core_mode_select"
+grep -q 'id="btn_core_mode_apply"' "$INDEX_VOLT" || fail "index.volt missing #btn_core_mode_apply"
+grep -q 'id="core_mode_msg"' "$INDEX_VOLT" || fail "index.volt missing #core_mode_msg"
+grep -q 'id="core_mode_config"' "$INDEX_VOLT" || fail "index.volt missing #core_mode_config"
+grep -q '配置默认' "$INDEX_VOLT" || fail "index.volt missing '配置默认' label"
+grep -q '内核模式' "$INDEX_VOLT" || fail "index.volt missing '内核模式' label"
 
-# 轮询逻辑断言（4000ms 且包含 getMode 与 getMihomoStatus）
-grep -q '4000' "$STATUS_VOLT" || fail "status.volt missing 4000ms polling interval"
-grep -q 'getMode' "$STATUS_VOLT" || fail "status.volt missing getMode call"
-grep -q 'setMode' "$STATUS_VOLT" || fail "status.volt missing setMode call"
+# 运行指标（吸收原运行状态页 KPI）
+for id in ov_uptime ov_memory ov_pid ov_versions; do
+    grep -q "id=\"$id\"" "$INDEX_VOLT" || fail "index.volt missing #$id"
+done
 
-pass "status.volt contains correct badges, runtime controls, no subtitle, and proper polling"
+# 轮询逻辑断言（5000ms 且包含 getMode 与 getMihomoStatus）
+grep -q '5000' "$INDEX_VOLT" || fail "index.volt missing 5000ms polling interval"
+grep -q 'getMihomoStatus' "$INDEX_VOLT" || fail "index.volt missing getMihomoStatus call"
+grep -q 'getMode' "$INDEX_VOLT" || fail "index.volt missing getMode call"
+grep -q 'setMode' "$INDEX_VOLT" || fail "index.volt missing setMode call"
+
+pass "index.volt 概览承载接入方式、TUN/API 徽章、内核模式运行时切换与运行指标"
 
 # ---------------------------------------------------------------------------
 echo "--> Test 4: StatusController.php 静态契约断言..."
@@ -140,7 +154,7 @@ pass "service_manager.sh correctly uses transport_mode_now for RUNNING/DEGRADED 
 
 # ---------------------------------------------------------------------------
 echo "--> Test 6: 零硬编码守卫（相关文件均无 :9090）..."
-for f in "$STATUS_PY" "$STATUS_VOLT" "$STATUS_CTRL"; do
+for f in "$STATUS_PY" "$INDEX_VOLT" "$STATUS_CTRL"; do
     if grep -q ":9090" "$f"; then
         fail "$f contains literal :9090"
     fi

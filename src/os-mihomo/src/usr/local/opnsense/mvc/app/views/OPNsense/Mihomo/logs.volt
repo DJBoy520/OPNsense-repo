@@ -6,66 +6,60 @@
 {{ partial('OPNsense/Mihomo/styles') }}
 
 <div class="mihomo-page">
-    <div class="content-box" style="padding-bottom: 1.5em;">
-        <div class="col-xs-12">
-            <h2 class="mihomo-card-title">{{ lang._('实时日志') }}</h2>
-            <p class="text-muted">{{ lang._('实时展示 Mihomo 核心守护进程日志，敏感凭据已自动脱敏。') }}</p>
-            <hr/>
-        </div>
-
-        <!-- 顶部控件栏 -->
-        <div class="col-xs-12 mihomo-toolbar form-inline" style="margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
-            <div class="form-group">
-                <label for="log_level_filter" style="margin-right: 6px;">{{ lang._('日志级别') }}：</label>
-                <select id="log_level_filter" class="selectpicker" data-width="130px">
-                    <option value="all" selected>{{ lang._('全部级别') }}</option>
-                    <option value="debug">{{ lang._('调试') }}</option>
-                    <option value="info">{{ lang._('信息') }}</option>
-                    <option value="warning">{{ lang._('警告') }}</option>
-                    <option value="error">{{ lang._('错误') }}</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="log_limit" style="margin-right: 6px;">{{ lang._('行数') }}：</label>
-                <select id="log_limit" class="selectpicker" data-width="90px">
-                    <option value="100">100</option>
-                    <option value="200" selected>200</option>
-                    <option value="500">500</option>
-                    <option value="1000">1000</option>
-                    <option value="2000">2000</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <button class="btn btn-default" id="btn_toggle_pause" type="button" title="{{ lang._('暂停 / 继续轮询') }}">
-                    <i class="fa fa-pause" id="icon_toggle_pause"></i> <span id="text_toggle_pause">{{ lang._('暂停') }}</span>
-                </button>
-                <button class="btn btn-default" id="btn_clear_logs" type="button" title="{{ lang._('清空屏幕日志') }}">
-                    <i class="fa fa-trash-o"></i> {{ lang._('清屏') }}
-                </button>
-                <button class="btn btn-default" id="btn_download_logs" type="button" title="{{ lang._('下载原始日志') }}">
-                    <i class="fa fa-download"></i> {{ lang._('下载') }}
-                </button>
-            </div>
-
-            <div class="form-group">
-                <label style="font-weight: normal; margin-bottom: 0; cursor: pointer;">
-                    <input type="checkbox" id="chk_auto_scroll" checked> {{ lang._('自动滚动') }}
-                </label>
-            </div>
-
+    <div class="mihomo-card">
+        <div class="mihomo-card-head">
+            <h2 class="mihomo-card-title">
+                <span><i class="fa fa-file-text-o"></i> {{ lang._('实时日志') }}</span>
+            </h2>
             <!-- 状态指示徽章 -->
-            <div class="form-group" style="margin-left: auto;">
-                <span id="log_conn_status" class="label label-success" style="font-size: 12px; padding: 5px 10px;">
-                    <i class="fa fa-circle" style="font-size: 9px; vertical-align: middle; margin-right: 4px;"></i><span id="log_conn_text">{{ lang._('实时') }}</span>
-                </span>
-            </div>
+            <span id="log_conn_status" class="label label-success" style="font-size: 12px; padding: 5px 10px;">
+                <i class="fa fa-circle" style="font-size: 9px; vertical-align: middle; margin-right: 4px;"></i><span id="log_conn_text">{{ lang._('实时') }}</span>
+            </span>
         </div>
+        <div class="mihomo-card-body">
+            <!-- 顶部控件栏 -->
+            <div class="mihomo-toolbar form-inline" style="margin-bottom: 12px;">
+                <div class="form-group">
+                    <label for="log_level_filter" style="margin-right: 6px;">{{ lang._('日志级别') }}：</label>
+                    <select id="log_level_filter" class="selectpicker" data-width="130px">
+                        <option value="all" selected>{{ lang._('全部级别') }}</option>
+                        <option value="debug">{{ lang._('调试') }}</option>
+                        <option value="info">{{ lang._('信息') }}</option>
+                        <option value="warning">{{ lang._('警告') }}</option>
+                        <option value="error">{{ lang._('错误') }}</option>
+                    </select>
+                </div>
 
-        <!-- 表格化滚动区 -->
-        <div class="col-xs-12">
-            <div id="log_container" class="mihomo-log-view" style="height: 600px; overflow-y: auto; overflow-x: hidden;">
+                <div class="form-group">
+                    <label for="log_limit" style="margin-right: 6px;">{{ lang._('每页行数') }}：</label>
+                    <select id="log_limit" class="selectpicker" data-width="90px">
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <button class="btn btn-default" id="btn_toggle_pause" type="button" title="{{ lang._('暂停 / 继续轮询') }}">
+                        <i class="fa fa-pause" id="icon_toggle_pause"></i> <span id="text_toggle_pause">{{ lang._('暂停') }}</span>
+                    </button>
+                    <button class="btn btn-default" id="btn_clear_logs" type="button" title="{{ lang._('清空屏幕日志') }}">
+                        <i class="fa fa-trash-o"></i> {{ lang._('清屏') }}
+                    </button>
+                    <button class="btn btn-default" id="btn_download_logs" type="button" title="{{ lang._('下载原始日志') }}">
+                        <i class="fa fa-download"></i> {{ lang._('下载') }}
+                    </button>
+                </div>
+
+                <div class="form-group">
+                    <label style="font-weight: normal; margin-bottom: 0; cursor: pointer;">
+                        <input type="checkbox" id="chk_auto_scroll" checked> {{ lang._('自动滚动') }}
+                    </label>
+                </div>
+            </div>
+
+            <!-- 表格化滚动区（高度随行数自适应，上限见 .mihomo-log-view） -->
+            <div id="log_container" class="mihomo-log-view" style="min-height: 200px;">
                 <table class="table table-condensed mihomo-log-table" style="margin-bottom: 0; width: 100%;">
                     <thead>
                         <tr>
@@ -91,7 +85,16 @@ $(function () {
     var isPaused = false;
     var pollTimer = null;
     var retryDelay = 2000;
-    var MAX_DOM_ROWS = 2000;
+    /* DOM 行数上限跟随「每页行数」选择：超出即丢弃最旧行，保持一屏可控 */
+    var maxDomRows = currentLimit();
+
+    function currentLimit() {
+        var raw = parseInt($('#log_limit').val(), 10);
+        if (raw === 50 || raw === 100) {
+            return raw;
+        }
+        return 20;
+    }
 
     var $tableBody = $('#log_table_body');
     var $container = $('#log_container');
@@ -204,8 +207,8 @@ $(function () {
 
     function trimDomRows() {
         var rowCount = $tableBody.children('tr').length;
-        if (rowCount > MAX_DOM_ROWS) {
-            var excess = rowCount - MAX_DOM_ROWS;
+        if (rowCount > maxDomRows) {
+            var excess = rowCount - maxDomRows;
             $tableBody.children('tr').slice(0, excess).remove();
         }
     }
@@ -229,7 +232,8 @@ $(function () {
         }
 
         var level = $('#log_level_filter').val();
-        var limit = parseInt($('#log_limit').val(), 10) || 200;
+        var limit = currentLimit();
+        maxDomRows = limit;
 
         ajaxCall('/api/mihomo/logs/getLogs', {
             level: level,
@@ -337,6 +341,7 @@ $(function () {
     // 过滤条件改变：重置游标并重新拉取
     $('#log_level_filter, #log_limit').change(function () {
         currentCursor = 0;
+        maxDomRows = currentLimit();
         $tableBody.empty();
         if (!isPaused) {
             clearTimeout(pollTimer);

@@ -136,9 +136,16 @@
     padding: 16px 20px;
 }
 
-/* 表单外框容器 */
+/* 表单外框容器（宽屏下表单两列网格铺满卡片） */
 .mihomo-form-wrap {
-    max-width: 760px;
+    max-width: none;
+}
+
+/* OPNsense 核心样式把表单控件限宽 348px；长文本（订阅地址等）需要铺满 */
+input.mh-input-wide,
+.mihomo-modern-form input.mh-input-wide {
+    max-width: 100% !important;
+    width: 100%;
 }
 
 /* Stat 网格体系（状态页等） */
@@ -182,6 +189,33 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
+/* 卡片内紧凑指标条（概览吸收运行状态指标时使用，横向 4 列） */
+.mihomo-kv-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px 12px;
+    padding: 10px 0;
+    margin: 10px 0 12px;
+    border-top: 1px dashed var(--mh-card-border);
+    border-bottom: 1px dashed var(--mh-card-border);
+}
+.mihomo-kv-strip > div {
+    min-width: 0;
+}
+.mihomo-kv-strip .mh-kv-label {
+    font-size: 11px;
+    color: var(--mh-muted);
+    margin-bottom: 2px;
+}
+.mihomo-kv-strip .mh-kv-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mh-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* KV 紧凑两列表格体系 */
 .mihomo-kv {
     width: 100%;
@@ -211,6 +245,7 @@
 .mihomo-kv td {
     color: #333333;
     background-color: #ffffff;
+    font-variant-numeric: tabular-nums;
 }
 
 /* 区块与分割 */
@@ -301,10 +336,11 @@
     border: 1px solid var(--mh-card-border);
     border-radius: var(--mh-radius);
     background-color: #ffffff;
-    overflow: hidden;
+    overflow: hidden auto;
+    max-height: 620px;
 }
 .mihomo-group-item {
-    padding: 10px 14px;
+    padding: 9px 12px;
     border-bottom: 1px solid #eeeeee;
     cursor: pointer;
     transition: background-color 0.15s ease-in-out;
@@ -321,34 +357,66 @@
     font-weight: 600;
 }
 
-/* 节点网格与节点卡片 */
-.mihomo-node-grid {
+/* 节点紧凑行列表：一行一节点，多列铺满卡片宽度，避免左满右空 */
+.mihomo-node-list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 0 14px;
+    align-content: start;
 }
 .mihomo-node {
-    background-color: #ffffff;
-    border: 1px solid var(--mh-card-border);
-    border-radius: var(--mh-radius);
-    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--mh-radius-sm);
     cursor: pointer;
-    transition: all 0.15s ease-in-out;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    transition: background-color 0.12s ease-in-out, border-color 0.12s ease-in-out;
 }
 .mihomo-node:hover {
-    border-color: var(--mh-brand);
-    box-shadow: 0 2px 5px var(--mh-brand-ring);
+    background-color: #f4f6f9;
+    border-color: var(--mh-card-border);
 }
 .mihomo-node.is-current {
     background-color: var(--mh-brand-light);
     border-color: var(--mh-brand);
-    border-width: 1.5px;
 }
 .mihomo-node.is-disabled {
     cursor: not-allowed;
-    opacity: 0.6;
-    background-color: #fafafa;
+    opacity: 0.7;
+}
+.mihomo-node-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    color: #333333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mihomo-node.is-current .mihomo-node-name {
+    font-weight: 600;
+    color: var(--mh-brand);
+}
+.mihomo-node-name .fa {
+    color: var(--mh-brand);
+    margin-right: 5px;
+    font-size: 11px;
+}
+.mihomo-node-type {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--mh-muted);
+    background-color: #f1f5f9;
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+.mihomo-node .mihomo-delay {
+    flex: 0 0 auto;
+    min-width: 56px;
+    text-align: right;
 }
 
 /* 延迟指示徽章 */
@@ -546,6 +614,77 @@
     border-bottom: 2px solid var(--mh-card-border);
 }
 
+/* 原生下拉统一垂直居中（核心样式的行高大于紧凑高度时文字会下沉） */
+.mihomo-page select.form-control {
+    line-height: 1.5;
+}
+.mihomo-page select.form-control.input-sm {
+    height: 32px;
+    line-height: 20px;
+    padding: 4px 10px;
+}
+
+/* 规则页：列宽与紧凑行高 */
+.mh-col-index {
+    width: 52px;
+    text-align: center;
+}
+.mh-col-type {
+    width: 158px;
+}
+.mh-col-target {
+    width: 190px;
+}
+.mh-col-opt {
+    width: 108px;
+    text-align: center;
+}
+.mh-col-act {
+    width: 48px;
+    text-align: center;
+}
+.mihomo-editor-table {
+    margin-bottom: 0;
+}
+.mihomo-editor-table > tbody > tr > td {
+    vertical-align: middle;
+    padding: 4px 8px;
+    border-top: 1px solid #eeeeee;
+}
+.mihomo-editor-table > tbody > tr:hover {
+    background-color: #fafbfc;
+}
+.mihomo-editor-wrap {
+    max-height: calc(100vh - 330px);
+}
+.mihomo-query-wrap {
+    max-height: calc(100vh - 330px);
+    min-height: 200px;
+}
+.mihomo-editor-foot {
+    justify-content: space-between;
+    margin: 12px 0 0 0;
+    padding-top: 12px;
+    border-top: 1px dashed var(--mh-card-border);
+}
+.mihomo-query-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    background-color: #fafafa;
+    border: 1px solid var(--mh-card-border);
+    border-radius: var(--mh-radius);
+}
+.mh-mine-dot {
+    color: var(--mh-brand);
+    font-size: 8px;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
 /* ========================================================
    v1.3.0 新增 Dashboard 组件类
    ======================================================== */
@@ -709,7 +848,18 @@
     font-weight: 600;
 }
 .mihomo-modern-form table.table > tbody {
-    display: block;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 2px 36px;
+}
+/* 长 help 文本或 checkbox 行占满整行，避免两列挤压 */
+.mihomo-modern-form table.table > tbody > tr.mh-span-full {
+    grid-column: 1 / -1;
+}
+/* OPNsense base_form 自动注入的 "full help / advanced mode" 开关行：本插件不展示字段帮助，整行移除 */
+.mihomo-modern-form table.table > tbody > tr:has(i[id^="show_all_help_"]),
+.mihomo-modern-form table.table > tbody > tr:has(i[id^="show_advanced_"]) {
+    display: none;
 }
 .mihomo-modern-form table.table > tbody > tr {
     display: block;
@@ -777,6 +927,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 8px 12px;
+    grid-column: 1 / -1;
 }
 .mihomo-modern-form table.table > tbody > tr:has(input[type="checkbox"]) > td:first-child {
     display: inline-flex;
@@ -799,74 +950,6 @@
     width: 100% !important;
     order: 3;
     padding: 2px 0 0 0 !important;
-}
-
-/* 策略来源单选卡片组 */
-.mihomo-radio-cards {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 14px;
-    margin-top: 10px;
-    margin-bottom: 15px;
-}
-.mihomo-radio-card {
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-    padding: 14px 16px;
-    background-color: var(--mh-card-bg);
-    border: 1.5px solid var(--mh-card-border);
-    border-radius: var(--mh-radius);
-    cursor: pointer;
-    transition: all 0.15s ease-in-out;
-}
-.mihomo-radio-card:hover {
-    background-color: var(--mh-brand-light);
-    border-color: #cbd5e1;
-}
-.mihomo-radio-card.is-active {
-    border-color: var(--mh-brand);
-    background-color: var(--mh-brand-light);
-}
-.mihomo-radio-indicator {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: 2px solid #cbd5e1;
-    margin-right: 12px;
-    margin-top: 1px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: #ffffff;
-    transition: all 0.15s ease-in-out;
-}
-.mihomo-radio-card.is-active .mihomo-radio-indicator {
-    border-color: var(--mh-brand);
-    background-color: var(--mh-brand);
-}
-.mihomo-radio-card.is-active .mihomo-radio-indicator::after {
-    content: '';
-    width: 6px;
-    height: 10px;
-    border: solid #ffffff;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-    margin-bottom: 2px;
-}
-.mihomo-radio-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--mh-text);
-    margin-bottom: 4px;
-    line-height: 1.4;
-}
-.mihomo-radio-desc {
-    font-size: 12px;
-    color: var(--mh-muted);
-    line-height: 1.4;
-    margin-bottom: 0;
 }
 
 /* 警告提示条 */
@@ -904,6 +987,151 @@
     margin-right: 6px;
 }
 
+/* 概览等高卡片行（两卡对齐拉伸，消除一高一低） */
+.mihomo-row-cards {
+    display: flex;
+    flex-wrap: wrap;
+}
+.mihomo-row-cards > [class*="col-"] {
+    display: flex;
+}
+.mihomo-row-cards > [class*="col-"] > .mihomo-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+.mihomo-row-cards .mihomo-card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+.mihomo-row-cards .mihomo-stat-card {
+    flex: 1;
+}
+
+/* 全局轻提示 Toast（替代成功类模态弹窗，不打断操作） */
+.mihomo-toast-stack {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+.mihomo-toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 240px;
+    max-width: 420px;
+    padding: 10px 14px;
+    border-radius: var(--mh-radius);
+    background-color: #ffffff;
+    border: 1px solid var(--mh-card-border);
+    border-left: 4px solid var(--mh-info);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+    font-size: 13px;
+    color: var(--mh-text);
+    opacity: 0;
+    transform: translateX(12px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mihomo-toast.is-visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+.mihomo-toast i.fa {
+    flex-shrink: 0;
+}
+.mihomo-toast.is-success {
+    border-left-color: var(--mh-success);
+}
+.mihomo-toast.is-success i.fa {
+    color: var(--mh-success);
+}
+.mihomo-toast.is-danger {
+    border-left-color: var(--mh-danger);
+}
+.mihomo-toast.is-danger i.fa {
+    color: var(--mh-danger);
+}
+.mihomo-toast.is-info i.fa {
+    color: var(--mh-info);
+}
+.mihomo-toast .mihomo-toast-close {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+/* 折叠开关箭头旋转（自定义密钥等折叠区块复用） */
+.mihomo-collapse-toggle i.fa-chevron-down {
+    transition: transform 0.2s ease;
+}
+.mihomo-collapse-toggle.is-open i.fa-chevron-down {
+    transform: rotate(180deg);
+}
+
+/* 概览指标键值行（吸收运行状态页信息） */
+.mihomo-kv-rows {
+    margin-bottom: 12px;
+}
+.mihomo-kv-rows > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 5px 0;
+    border-bottom: 1px dashed var(--mh-card-border);
+    font-size: 13px;
+}
+.mihomo-kv-rows > div:last-child {
+    border-bottom: none;
+}
+.mihomo-kv-rows .mh-kv-label {
+    color: var(--mh-muted);
+    flex: 0 0 auto;
+}
+.mihomo-kv-rows .mh-kv-value {
+    color: var(--mh-text);
+    font-weight: 600;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 紧凑单选行（内核模式：下拉 + 应用按钮同行） */
+.mihomo-inline-ctl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.mihomo-inline-ctl .form-control {
+    height: 30px;
+    /* 固定高度必须容得下行高，否则原生 select 的文字会沉到框的下半部 */
+    line-height: 20px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: auto;
+    max-width: 180px;
+}
+.mihomo-inline-ctl .btn {
+    padding: 4px 10px;
+}
+.mihomo-inline-note {
+    font-size: 11px;
+    color: var(--mh-muted);
+    min-width: 0;
+}
+
 /* 响应式断点（767px 以下单列） */
 @media (max-width: 767px) {
     .mihomo-toolbar {
@@ -923,11 +1151,21 @@
     .mihomo-proxy-layout {
         flex-direction: column;
     }
-    .mihomo-node-grid {
+    .mihomo-node-list {
         grid-template-columns: 1fr;
     }
-    .mihomo-radio-cards {
-        grid-template-columns: 1fr;
+    .mihomo-kv-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .mh-col-index,
+    .mh-col-type,
+    .mh-col-target,
+    .mh-col-opt,
+    .mh-col-act {
+        width: auto;
+    }
+    .mihomo-query-bar {
+        align-items: stretch;
     }
     .mihomo-kv th,
     .mihomo-kv td {
@@ -939,5 +1177,34 @@
         border-bottom: none;
         background-color: #f7f7f7;
     }
+    .mihomo-modern-form table.table > tbody {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
+<script type="text/javascript">
+/* 全站轻提示：成功/信息类反馈用 toast，错误与确认仍走模态框 */
+function mhToast(message, type, duration) {
+    type = type || 'info';
+    duration = duration || 3500;
+    var $stack = $('.mihomo-toast-stack');
+    if ($stack.length === 0) {
+        $stack = $('<div class="mihomo-toast-stack"></div>').appendTo('body');
+    }
+    var icons = { success: 'fa-check-circle', danger: 'fa-times-circle', info: 'fa-info-circle' };
+    var $item = $('<div class="mihomo-toast is-' + type + '"></div>');
+    $item.append($('<i class="fa ' + (icons[type] || icons.info) + '"></i>'));
+    $item.append($('<span style="word-break: break-all;"></span>').text(String(message)));
+    $item.append($('<button type="button" class="mihomo-toast-close"><i class="fa fa-times"></i></button>'));
+    $stack.append($item);
+    window.requestAnimationFrame(function () { $item.addClass('is-visible'); });
+    var timer = setTimeout(dismiss, duration);
+    function dismiss() {
+        clearTimeout(timer);
+        $item.removeClass('is-visible');
+        setTimeout(function () { $item.remove(); }, 250);
+    }
+    $item.find('.mihomo-toast-close').on('click', dismiss);
+    return $item;
+}
+</script>

@@ -10,9 +10,9 @@ ACTIONS="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/service/conf/actions.d/a
 
 # Test 1: 每个 /ui/mihomo/{page} 菜单地址必须有同名页面控制器（Phalcon 路由
 # /ui/{module}/{controller} 按控制器文件名解析；挂在 IndexController 上的
-# action 不可达，历史上导致 Rules/Status/Logs 三页 Page not found）
+# action 不可达，历史上导致 Rules/Proxies/Logs 三页 Page not found）
 echo "--> Test 1: page controllers for every menu URL..."
-for page in index rules status logs; do
+for page in index rules proxies logs; do
     if [ "$page" = "index" ]; then
         PAGE_CTRL="$CTRL_DIR/IndexController.php"
     else
@@ -27,12 +27,16 @@ done
 # Test 2: 菜单 URL 与页面控制器一一对应
 MENU_XML="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/models/OPNsense/Mihomo/Menu/Menu.xml"
 echo "--> Test 2: menu URLs..."
-for page in "" rules status logs; do
+for page in "" rules proxies logs; do
     grep -q "url=\"/ui/mihomo/$page\"" "$MENU_XML" || {
         echo "FAIL: menu URL /ui/mihomo/$page not registered"; exit 1;
     }
 done
-echo "  [PASS] Menu.xml registers /ui/mihomo/, /rules/, /status/, /logs/"
+# 运行状态独立页已下线（信息并入常规设置概览），菜单不得再挂 /ui/mihomo/status
+if grep -q "url=\"/ui/mihomo/status\"" "$MENU_XML"; then
+    echo "FAIL: menu still registers /ui/mihomo/status (运行状态页应已下线)"; exit 1
+fi
+echo "  [PASS] Menu.xml registers /ui/mihomo/, /rules/, /proxies/, /logs/ and no /status"
 
 # Test 3: 26.7 configd API 回归守卫 —— configdRun 第二参是 detach（bool），
 # 传数组会变成 detach=true，configd 走异步 execute 只返回 job UUID
@@ -210,29 +214,34 @@ if grep -E "'9090'|\"9090\"|'127\.0\.0\.1'|\"127\.0\.0\.1\"" "$INDEX_VOLT" >/dev
 fi
 echo "  [PASS] index.volt has zero :9090 literals and no hardcoded JS port/bind fallback"
 
-# ④-b index.volt 新结构与 ID 断言（四张卡片、KV 布局与 API 控制元素）
+# ④-b index.volt 新结构与 ID 断言（面板与 API 并入基本设置、订阅与概览控件）
 echo "--> Test 8b: index.volt structure & element IDs..."
 for elem_id in \
     api_secret_masked btn_secret_reveal btn_secret_generate \
     api_secret_custom btn_secret_apply api_bundled_link \
-    api_wan_warn api_header_port api_dashboard_guide \
-    api_guide_content api_secret_help api_endpoint_display \
-    btn_copy_api_endpoint api_bind_badge \
+    api_wan_warn api_header_port api_secret_help api_endpoint_display \
+    btn_copy_api_endpoint api_bind_badge collapse_secret_custom \
     btn_start btn_stop btn_restart btn_reload service_status_badge \
     frm_general_settings btn_save \
-    sub_url sub_url_hint sub_url_masked sub_auto_update sub_interval \
-    sub_strategy btn_sub_save btn_sub_update btn_sub_update_icon \
-    sub_state sub_state_time sub_state_result sub_state_nodes \
-    sub_state_strategy sub_state_groups sub_state_rules sub_state_message; do
+    sub_url sub_url_hint sub_auto_update sub_interval \
+    btn_sub_save btn_sub_update btn_sub_update_icon \
+    sub_state sub_state_time sub_state_result sub_state_counts sub_state_message; do
     grep -q "$elem_id" "$INDEX_VOLT" || {
         echo "FAIL: index.volt missing required element/ID: $elem_id"; exit 1;
     }
 done
 for class_name in \
-    mihomo-card mihomo-card-head mihomo-form-wrap mihomo-kv mihomo-guide mihomo-toolbar; do
+    mihomo-card mihomo-card-head mihomo-form-wrap mihomo-kv mihomo-toolbar \
+    mihomo-modern-form mihomo-kv-rows mihomo-inline-ctl mihomo-row-cards; do
     grep -q "$class_name" "$INDEX_VOLT" || {
         echo "FAIL: index.volt missing required class: $class_name"; exit 1;
     }
+done
+# 已下线的结构不得回归：面板与 API 独立 Tab、客户端接入指南、订阅掩码行、策略来源选择器
+for gone in tab_api api_dashboard_guide api_guide_content api_link_preview sub_url_masked sub_strategy mihomo-radio-cards; do
+    if grep -q "$gone" "$INDEX_VOLT"; then
+        echo "FAIL: index.volt must not keep removed element: $gone"; exit 1
+    fi
 done
 echo "  [PASS] index.volt contains all required card structures, element IDs and classes"
 
@@ -246,37 +255,54 @@ for req_class in \
     mihomo-metric-grid mihomo-metric mihomo-kv mihomo-section \
     mihomo-guide mihomo-mode-row mihomo-chips mihomo-chip \
     mihomo-proxy-layout mihomo-group-list mihomo-group-item \
-    mihomo-node-grid mihomo-node mihomo-delay mihomo-picker-search \
-    mihomo-picker-list mihomo-picker-item mihomo-copy-btn mihomo-empty; do
+    mihomo-node-list mihomo-node mihomo-node-name mihomo-delay \
+    mihomo-picker-search mihomo-picker-list mihomo-picker-item \
+    mihomo-copy-btn mihomo-empty mihomo-kv-strip mihomo-kv-rows \
+    mihomo-inline-ctl mh-input-wide mh-col-index mihomo-query-bar \
+    mihomo-editor-table mihomo-toast mihomo-save-toast; do
     grep -q "\.$req_class" "$STYLES_VOLT" || {
         echo "FAIL: styles.volt missing CSS class .$req_class"; exit 1;
     }
 done
-echo "  [PASS] styles.volt defines full card/stat/metric/kv/guide/proxy/picker CSS classes"
+# 策略来源单选卡片与旧节点网格已删除
+for gone_class in mihomo-radio-cards mihomo-radio-card mihomo-node-grid; do
+    if grep -q "\.$gone_class" "$STYLES_VOLT"; then
+        echo "FAIL: styles.volt must not keep removed CSS class .$gone_class"; exit 1
+    fi
+done
+echo "  [PASS] styles.volt defines full card/stat/metric/kv/proxy/picker/toast CSS classes"
 
 # 1.3.0 Dashboard 化增量静态门禁（P3）
-# ④-d index.volt 4-Tab 结构、概览卡片 ID 与新增 DOM 元素断言
-echo "--> Test 8d: index.volt 1.3.0 Tab structure & element IDs..."
-# BS3 nav-tabs 与 4 个 tab-pane
+# ④-d index.volt 3-Tab 结构、概览卡片 ID 与新增 DOM 元素断言
+echo "--> Test 8d: index.volt Tab structure & overview element IDs..."
+# BS3 nav-tabs 与 3 个 tab-pane（面板与 API 已并入基本设置）
 grep -q 'data-toggle="tab"' "$INDEX_VOLT" || {
     echo "FAIL: index.volt missing data-toggle=\"tab\""; exit 1;
 }
-for tab_id in tab_overview tab_general tab_subscription tab_api; do
+for tab_id in tab_overview tab_general tab_subscription; do
     grep -q "$tab_id" "$INDEX_VOLT" || {
         echo "FAIL: index.volt missing tab pane ID: $tab_id"; exit 1;
     }
 done
 
-# 概览新 id 契约
+# 概览新 id 契约（吸收原运行状态页：TUN/API 徽章、内核模式运行时切换、运行指标）
 for ov_elem_id in \
-    ov_state_dot ov_state_text ov_transport ov_core_mode ov_autostart \
-    ov_nodes ov_groups ov_rules ov_sub_masked ov_sub_result \
-    ov_sub_time ov_sub_msg ov_btn_sub_update; do
+    ov_state_dot ov_state_text ov_autostart ov_core_mode_select \
+    btn_core_mode_apply core_mode_config core_mode_msg btn_ov_refresh \
+    ov_uptime ov_memory ov_pid ov_tun ov_api ov_versions \
+    ov_nodes ov_groups ov_rules ov_sub_result \
+    ov_sub_time ov_btn_sub_update; do
     grep -q "$ov_elem_id" "$INDEX_VOLT" || {
         echo "FAIL: index.volt missing overview element ID: $ov_elem_id"; exit 1;
     }
 done
-echo "  [PASS] index.volt contains 4 nav-tabs panes and all overview element IDs"
+# 概览不得再放跳转入口与结果文案（信息就地展示）
+for gone_ov in ov_sub_msg ov_sub_masked 查看运行状态 打开策略组; do
+    if grep -q "$gone_ov" "$INDEX_VOLT"; then
+        echo "FAIL: index.volt overview must not contain: $gone_ov"; exit 1
+    fi
+done
+echo "  [PASS] index.volt contains 3 nav-tabs panes and all overview element IDs"
 
 # ④-e styles.volt 1.3.0 Design Tokens、关键帧动画与组件样式类断言
 echo "--> Test 8e: styles.volt 1.3.0 tokens & classes..."
@@ -298,12 +324,16 @@ grep -q "mh-shimmer" "$STYLES_VOLT" || {
 
 # 新增样式类
 for mh_class in \
-    mihomo-status-dot mihomo-stat-card mihomo-radio-cards \
-    mihomo-modern-form mihomo-skeleton mihomo-save-toast; do
+    mihomo-status-dot mihomo-stat-card \
+    mihomo-modern-form mihomo-skeleton mihomo-save-toast mihomo-toast; do
     grep -q "\.$mh_class" "$STYLES_VOLT" || {
         echo "FAIL: styles.volt missing CSS class .$mh_class"; exit 1;
     }
 done
+# 全站轻提示组件必须存在（成功类反馈统一走 toast）
+grep -q "function mhToast" "$STYLES_VOLT" || {
+    echo "FAIL: styles.volt missing mhToast() helper"; exit 1;
+}
 echo "  [PASS] styles.volt defines 1.3.0 tokens, mh-dot-pulse/shimmer, and all new component classes"
 
 # ④-f index.volt 1.3.0 JS 交互契约断言

@@ -115,21 +115,45 @@ grep -q "btn_mode_table" "$VIEW_FILE" || fail "rules.volt missing btn_mode_table
 grep -q "switchMode" "$VIEW_FILE" || fail "rules.volt missing switchMode function"
 pass "raw source mode toggle present"
 
-# 10. 断言 rules.volt 包含生效规则区与分页控件
-echo "--> Testing rules.volt: effective rules view and pagination controls..."
+# 9a. 页面结构：拆为「自定义规则 / 规则查询」两个 Tab
+echo "--> Testing rules.volt: two-tab layout..."
+grep -q 'id="tab_rules_edit"' "$VIEW_FILE" || fail "rules.volt missing #tab_rules_edit"
+grep -q 'id="tab_rules_query"' "$VIEW_FILE" || fail "rules.volt missing #tab_rules_query"
+grep -q 'class="mihomo-tabs-bar"' "$VIEW_FILE" || fail "rules.volt missing mihomo-tabs-bar"
+grep -q 'restoreTabFromHash' "$VIEW_FILE" || fail "rules.volt must bind tabs to URL hash"
+if grep -q '打开策略组' "$VIEW_FILE"; then
+    fail "rules.volt must drop the 打开策略组 jump button"
+fi
+if grep -q 'rules_types_container' "$VIEW_FILE"; then
+    fail "rules.volt must drop the 允许的规则类型 info row"
+fi
+pass "rules.volt 采用双 Tab 结构且已移除冗余信息层与跳转按钮"
+
+# 10. 断言 rules.volt 规则查询区：按需查询 + 分页控件
+echo "--> Testing rules.volt: on-demand rule query and pagination controls..."
 grep -q "getEffectiveRules" "$VIEW_FILE" || fail "rules.volt missing getEffectiveRules AJAX call"
 grep -q "tbl_effective_rules" "$VIEW_FILE" || fail "rules.volt missing tbl_effective_rules"
 grep -q "filter_effective_rules" "$VIEW_FILE" || fail "rules.volt missing filter_effective_rules search input"
 grep -q "effective_prev" "$VIEW_FILE" || fail "rules.volt missing effective_prev pagination button"
 grep -q "effective_next" "$VIEW_FILE" || fail "rules.volt missing effective_next pagination button"
+grep -q "effective_first" "$VIEW_FILE" || fail "rules.volt missing effective_first (首页) button"
+grep -q "effective_last" "$VIEW_FILE" || fail "rules.volt missing effective_last (末页) button"
+grep -q "effective_limit" "$VIEW_FILE" || fail "rules.volt missing effective_limit 每页条数选择"
 grep -q "effective_page_info" "$VIEW_FILE" || fail "rules.volt missing effective_page_info span"
 grep -q "effective_count_label" "$VIEW_FILE" || fail "rules.volt missing effective_count_label"
-grep -q "350" "$VIEW_FILE" || fail "rules.volt missing 350ms search debounce"
-pass "effective rules section and pagination controls present"
+grep -q "btn_effective_search" "$VIEW_FILE" || fail "rules.volt missing btn_effective_search 查询按钮"
+# 查询改为显式触发（按钮 / 回车），不再输入即防抖自动请求
+grep -q "runQuery" "$VIEW_FILE" || fail "rules.volt missing runQuery"
+grep -q "e.which === 13" "$VIEW_FILE" || fail "rules.volt must query on Enter key"
+if grep -q "searchDebounceTimer" "$VIEW_FILE"; then
+    fail "rules.volt must drop the 350ms auto-search debounce (改为按需查询)"
+fi
+pass "规则查询为按需触发，含每页条数与首/末页分页控件"
 
-# 11. 断言 rules.volt 序列化修复：payload !== '' 及 data-line 重排
+# 11. 断言 rules.volt 序列化修复：空 payload 不输出 及 data-line 重排
 echo "--> Testing rules.volt: serialization logic..."
-grep -q "payload !== ''" "$VIEW_FILE" || fail "rules.volt missing payload !== '' check"
+grep -q "if (payload === '')" "$VIEW_FILE" || fail "rules.volt missing empty-payload guard in serialization"
+grep -q "removeAttr('data-line')" "$VIEW_FILE" || fail "rules.volt must clear data-line for skipped rows"
 grep -q "attr('data-line', outLineNum)" "$VIEW_FILE" || fail "rules.volt missing data-line reindexing in serialization"
 pass "serialization only emits non-empty payload and reindexes data-line"
 
@@ -215,10 +239,15 @@ grep -q 'buildTargetPicker' "$VIEW_FILE" || fail "rules.volt missing buildTarget
 grep -q 'openTargetPicker' "$VIEW_FILE" || fail "rules.volt missing openTargetPicker"
 grep -q "trigger('change')" "$VIEW_FILE" || fail "rules.volt picker must trigger change"
 grep -q 'updateCounter' "$VIEW_FILE" || fail "rules.volt picker must keep updateCounter"
-grep -q 'rules_targets_source' "$VIEW_FILE" || fail "rules.volt missing live/offline source badge"
 grep -q 'getGroups' "$VIEW_FILE" || fail "rules.volt missing getGroups live source"
 grep -q 'loadLiveGroups' "$VIEW_FILE" || fail "rules.volt missing loadLiveGroups"
-grep -q 'mihomo-chip' "$VIEW_FILE" || fail "rules.volt missing target chips"
+# 目标策略只服务行内选择器：整条 chips 与实时/离线徽章已按需求移除
+if grep -q 'rules_targets_source' "$VIEW_FILE"; then
+    fail "rules.volt must drop the live/offline source badge"
+fi
+if grep -q 'mihomo-chip' "$VIEW_FILE"; then
+    fail "rules.volt must drop the target chips row"
+fi
 grep -q 'parseTextToTable' "$VIEW_FILE" || fail "rules.volt missing parseTextToTable"
 grep -q "\.find('.rule-field-target').val()" "$VIEW_FILE" || fail "serializeTableToText must still read .rule-field-target"
 if grep -q 'buildTargetSelect' "$VIEW_FILE"; then

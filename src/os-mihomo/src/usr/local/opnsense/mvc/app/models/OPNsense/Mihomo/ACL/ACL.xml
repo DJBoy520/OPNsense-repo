@@ -15,15 +15,9 @@
             <pattern>api/mihomo/general/*</pattern>
             <pattern>api/mihomo/service/*</pattern>
             <pattern>api/mihomo/subscription/*</pattern>
-        </patterns>
-    </page-services-mihomo-general>
-    <page-services-mihomo-status>
-        <name>服务：Mihomo：运行状态</name>
-        <patterns>
-            <pattern>ui/mihomo/status*</pattern>
             <pattern>api/mihomo/status/*</pattern>
         </patterns>
-    </page-services-mihomo-status>
+    </page-services-mihomo-general>
     <page-services-mihomo-logs>
         <name>服务：Mihomo：实时日志</name>
         <patterns>
@@ -43,6 +37,7 @@
         <patterns>
             <pattern>ui/mihomo/proxies*</pattern>
             <pattern>api/mihomo/proxies/*</pattern>
+            <pattern>api/mihomo/status/*</pattern>
         </patterns>
     </page-services-mihomo-proxies>
     <page-services-mihomo-subscription>

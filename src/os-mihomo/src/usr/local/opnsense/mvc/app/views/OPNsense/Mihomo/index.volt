@@ -13,40 +13,50 @@
             <li class="active" role="presentation"><a href="#tab_overview" data-toggle="tab" role="tab"><i class="fa fa-dashboard"></i> {{ lang._('概览') }}</a></li>
             <li role="presentation"><a href="#tab_general" data-toggle="tab" role="tab"><i class="fa fa-sliders"></i> {{ lang._('基本设置') }}</a></li>
             <li role="presentation"><a href="#tab_subscription" data-toggle="tab" role="tab"><i class="fa fa-rss"></i> {{ lang._('订阅与策略') }}</a></li>
-            <li role="presentation"><a href="#tab_api" data-toggle="tab" role="tab"><i class="fa fa-tachometer"></i> {{ lang._('面板与 API') }}</a></li>
         </ul>
     </div>
 
     <div class="tab-content">
-        <!-- Tab 1：概览 -->
+        <!-- Tab 1：概览（吸收运行状态页全部信息） -->
         <div class="tab-pane active" id="tab_overview">
-            <div class="row">
-            <div class="col-md-6">
+            <div class="row mihomo-row-cards">
+            <div class="col-md-4">
             <div class="mihomo-card">
                 <div class="mihomo-card-head">
                     <h2 class="mihomo-card-title">
-                        <span><i class="fa fa-cogs"></i> {{ lang._('系统状态') }}</span>
-                        <a class="btn btn-default btn-xs" href="/ui/mihomo/status">
-                            <i class="fa fa-heartbeat"></i> {{ lang._('查看运行状态') }}
-                        </a>
+                        <span><i class="fa fa-cogs"></i> {{ lang._('服务状态') }}</span>
+                        <button class="btn btn-default btn-xs" id="btn_ov_refresh" type="button" title="{{ lang._('刷新状态与指标') }}">
+                            <i class="fa fa-refresh"></i> {{ lang._('刷新') }}
+                        </button>
                     </h2>
                 </div>
                 <div class="mihomo-card-body">
                     <div class="mihomo-stat-card">
-                        <div>
+                        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
                             <span id="ov_state_dot" class="mihomo-status-dot"></span>
-                            <span id="ov_state_text" style="font-weight: 600; margin-left: 6px;">{{ lang._('检查中...') }}</span>
-                            <span id="service_status_badge" class="label label-default" style="margin-left: 8px;">
-                                <i class="fa fa-circle-o-notch fa-spin"></i> {{ lang._('检查中...') }}
-                            </span>
+                            <span id="ov_state_text" style="font-weight: 600;">{{ lang._('检查中...') }}</span>
+                            <span id="service_status_badge" class="label label-default" style="font-size: 11px; padding: 2px 6px;">-</span>
                         </div>
-                        <div style="font-size: 13px; color: var(--mh-muted); line-height: 2;">
-                            <div>{{ lang._('接入方式') }}：<span id="ov_transport">-</span></div>
-                            <div>{{ lang._('内核模式') }}：<span id="ov_core_mode">-</span>
-                                 <span style="margin-left: 12px;">{{ lang._('自启') }}：<span id="ov_autostart">-</span></span>
+                        <div style="font-size: 12px; color: var(--mh-muted); margin-top: 8px;">
+                            {{ lang._('开机自启') }}：<span id="ov_autostart">-</span>
+                        </div>
+                        <div style="margin-top: 12px;">
+                            <div class="mihomo-inline-ctl">
+                                <span class="mihomo-inline-note">{{ lang._('内核模式') }}</span>                                <select id="ov_core_mode_select" class="form-control input-sm">
+                                    <option value="rule">{{ lang._('规则分流 (rule)') }}</option>
+                                    <option value="global">{{ lang._('全局代理 (global)') }}</option>
+                                    <option value="direct">{{ lang._('直连 (direct)') }}</option>
+                                </select>
+                                <button class="btn btn-primary btn-xs" id="btn_core_mode_apply" type="button">
+                                    <i class="fa fa-check"></i> {{ lang._('应用') }}
+                                </button>
+                            </div>
+                            <div style="margin-top: 4px; font-size: 11px;">
+                                <span id="core_mode_config" class="mihomo-inline-note">{{ lang._('配置默认：-') }}</span>
+                                <span id="core_mode_msg" class="mihomo-inline-note"></span>
                             </div>
                         </div>
-                        <div class="mihomo-toolbar" style="margin-bottom: 0;">
+                        <div class="mihomo-toolbar" style="margin-bottom: 0; margin-top: 14px;">
                             <!-- 启动键独立于 btn-group：隐藏组内首个可见按钮时避免 BS3 圆角丢失 -->
                             <button class="btn btn-success" id="btn_start" type="button">
                                 <i class="fa fa-play"></i> {{ lang._('启动') }}
@@ -67,14 +77,50 @@
                 </div>
             </div>
             </div>
-            <div class="col-md-6">
+            <div class="col-md-4">
+            <div class="mihomo-card">
+                <div class="mihomo-card-head">
+                    <h2 class="mihomo-card-title">
+                        <span><i class="fa fa-line-chart"></i> {{ lang._('运行指标') }}</span>
+                    </h2>
+                </div>
+                <div class="mihomo-card-body">
+                    <div class="mihomo-stat-card">
+                        <div class="mihomo-kv-rows" style="width: 100%;">
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('运行时长') }}</span>
+                                <span class="mh-kv-value mihomo-mono" id="ov_uptime">-</span>
+                            </div>
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('内存占用') }}</span>
+                                <span class="mh-kv-value mihomo-mono" id="ov_memory">-</span>
+                            </div>
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('进程 ID') }}</span>
+                                <span class="mh-kv-value mihomo-mono" id="ov_pid">-</span>
+                            </div>
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('TUN 隧道') }}</span>
+                                <span class="mh-kv-value"><span id="ov_tun" class="label label-default" style="font-size: 11px; padding: 2px 6px;">-</span></span>
+                            </div>
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('控制 API') }}</span>
+                                <span class="mh-kv-value"><span id="ov_api" class="label label-default" style="font-size: 11px; padding: 2px 6px;">-</span></span>
+                            </div>
+                            <div>
+                                <span class="mh-kv-label">{{ lang._('插件 / 内核版本') }}</span>
+                                <span class="mh-kv-value mihomo-mono" id="ov_versions" title="-">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div>
+            <div class="col-md-4">
             <div class="mihomo-card">
                 <div class="mihomo-card-head">
                     <h2 class="mihomo-card-title">
                         <span><i class="fa fa-bar-chart"></i> {{ lang._('订阅资源') }}</span>
-                        <a class="btn btn-default btn-xs" href="/ui/mihomo/proxies">
-                            <i class="fa fa-sitemap"></i> {{ lang._('打开策略组') }}
-                        </a>
                     </h2>
                 </div>
                 <div class="mihomo-card-body">
@@ -94,16 +140,14 @@
                             </div>
                         </div>
                         <div style="font-size: 13px; color: var(--mh-muted); margin-bottom: 10px;">
-                            <code id="ov_sub_masked" class="mihomo-mono" style="font-size: 12px;">-</code>
-                            <span id="ov_sub_result" class="label label-default" style="margin: 0 6px;">-</span>
+                            <span id="ov_sub_result" class="label label-default" style="margin-right: 6px;">-</span>
                             <span id="ov_sub_time">-</span>
                         </div>
                         <div class="mihomo-toolbar" style="margin-bottom: 0;">
                             <button class="btn btn-default btn-sm" id="ov_btn_sub_update" type="button">
-                                <i class="fa fa-cloud-download"></i> {{ lang._('立即同步') }}
+                                <i class="fa fa-cloud-download"></i> {{ lang._('立即更新') }}
                             </button>
                         </div>
-                        <div id="ov_sub_msg" class="text-muted" style="font-size: 12px; margin-top: 8px; display: none;"></div>
                     </div>
                 </div>
             </div>
@@ -111,7 +155,7 @@
             </div>
         </div>
 
-        <!-- Tab 2：基本设置 -->
+        <!-- Tab 2：基本设置（运行参数 + 面板与 API 合并） -->
         <div class="tab-pane" id="tab_general">
             <div class="mihomo-card">
                 <div class="mihomo-card-head">
@@ -130,9 +174,76 @@
                     </div>
                 </div>
             </div>
+
+            <div class="mihomo-card">
+                <div class="mihomo-card-head">
+                    <h2 class="mihomo-card-title">
+                        <span><i class="fa fa-tachometer"></i> {{ lang._('面板与 API') }} <span id="api_header_port" class="badge" style="margin-left: 8px; font-weight: normal; background-color: #f0f0f0; color: #555555;"></span></span>
+                    </h2>
+                </div>
+                <div class="mihomo-card-body">
+                    <table class="table mihomo-kv">
+                        <tbody>
+                            <tr>
+                                <th>{{ lang._('内置面板') }}</th>
+                                <td>
+                                    <a id="api_bundled_link" href="#" target="_blank" rel="noopener noreferrer">-</a>
+                                    <button type="button" class="btn btn-xs btn-default mihomo-copy-btn" id="btn_copy_api_endpoint" style="margin-left: 8px;">
+                                        <i class="fa fa-clipboard"></i> {{ lang._('复制端点') }}
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>{{ lang._('控制 API') }}</th>
+                                <td>
+                                    <code id="api_endpoint_display" class="mihomo-mono">-</code>
+                                    <span id="api_bind_badge" class="label label-default mihomo-mono" style="margin-left: 8px; font-size: 11px;">-</span>
+                                    <div class="text-muted" style="font-size: 12px; margin-top: 4px;">
+                                        {{ lang._('外部面板（metacubexd / Zashboard）与自建流量工具填此地址，配合下方密钥使用。') }}
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>{{ lang._('认证密钥') }}</th>
+                                <td>
+                                    <code id="api_secret_masked" class="mihomo-mono" style="font-size: 13px;">{{ lang._('加载中...') }}</code>
+                                    <div style="margin-top: 6px;">
+                                        <button class="btn btn-xs btn-default" id="btn_secret_reveal" type="button">
+                                            <i class="fa fa-eye"></i> {{ lang._('查看密钥') }}
+                                        </button>
+                                        <button class="btn btn-xs btn-warning" id="btn_secret_generate" type="button" style="margin-left: 6px;">
+                                            <i class="fa fa-refresh"></i> {{ lang._('生成新密钥') }}
+                                        </button>
+                                        <a href="#collapse_secret_custom" data-toggle="collapse" style="margin-left: 12px; font-size: 12px;">
+                                            <i class="fa fa-caret-right"></i> {{ lang._('自定义密钥') }}
+                                        </a>
+                                    </div>
+                                    <div id="collapse_secret_custom" class="collapse" style="margin-top: 10px;">
+                                        <div class="input-group" style="max-width: 480px;">
+                                            <input type="text" class="form-control input-sm" id="api_secret_custom" placeholder="{{ lang._('4-128 个字符') }}" autocomplete="off" spellcheck="false"/>
+                                            <span class="input-group-btn">
+                                                <button class="btn btn-primary btn-sm" id="btn_secret_apply" type="button">
+                                                    <b>{{ lang._('应用') }}</b> <i id="btn_secret_apply_progress"></i>
+                                                </button>
+                                            </span>
+                                        </div>
+                                        <span class="help-block" style="font-size: 12px; margin-bottom: 0;">{{ lang._('仅允许字母、数字以及 . _ ~ @ # % ^ + = : ; , ! ? * -') }}</span>
+                                    </div>
+                                    <div class="text-muted" id="api_secret_help" style="font-size: 12px; margin-top: 6px;">
+                                        {{ lang._('修改后同步写入配置并热重载生效；旧密钥立即失效。') }}
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div id="api_wan_warn" class="mihomo-callout-warning" style="display: none; margin-top: 10px; margin-bottom: 0;">
+                        <i class="fa fa-exclamation-triangle"></i> {{ lang._('已监听全部网络接口（0.0.0.0）。建议仅在 LAN 接口监听并确保 WAN 防火墙阻断未授权流量。') }}
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <!-- Tab 3：订阅与策略 -->
+        <!-- Tab 3：订阅与策略（策略来源固定沿用订阅自带，选择器已移除） -->
         <div class="tab-pane" id="tab_subscription">
             <div class="mihomo-card">
                 <div class="mihomo-card-head">
@@ -141,63 +252,33 @@
                     </h2>
                 </div>
                 <div class="mihomo-card-body">
-                    <div class="form-group">
+                    <div class="form-group" style="max-width: 860px;">
                         <label for="sub_url">{{ lang._('订阅地址') }}</label>
-                        <input type="text" class="form-control" id="sub_url" placeholder="https://..." autocomplete="off" spellcheck="false"/>
+                        <input type="text" class="form-control mh-input-wide" id="sub_url" placeholder="https://..." autocomplete="off" spellcheck="false"/>
                         <span class="help-block text-muted" id="sub_url_hint">{{ lang._('请输入 https 订阅地址。') }}</span>
                     </div>
-                    <div class="form-group">
-                        <label>{{ lang._('当前订阅（掩码）') }}</label>
-                        <div>
-                            <code id="sub_url_masked" class="mihomo-mono" style="font-size: 13px;">{{ lang._('未配置') }}</code>
-                        </div>
-                        <span class="help-block">{{ lang._('存储的 URL 在此已脱敏展示；完整地址绝不输出至浏览器。') }}</span>
-                    </div>
 
-                    <div class="row">
-                        <div class="col-xs-12 col-sm-6">
+                    <div class="row" style="max-width: 860px;">
+                        <div class="col-sm-6">
                             <div class="checkbox" style="margin-top: 5px;">
-                                <label>
+                                <label style="font-weight: normal;">
                                     <input type="checkbox" id="sub_auto_update"/> {{ lang._('启用自动更新') }}
                                 </label>
                             </div>
+                        </div>
+                        <div class="col-sm-6">
                             <div class="form-group">
-                                <label for="sub_interval">{{ lang._('更新周期') }}</label>
-                                <select id="sub_interval" class="form-control" style="max-width: 260px;">
+                                <label for="sub_interval" style="font-size: 13px;">{{ lang._('更新周期') }}</label>
+                                <select id="sub_interval" class="form-control input-sm" style="max-width: 200px;">
                                     <option value="o6h">{{ lang._('每 6 小时') }}</option>
                                     <option value="o12h">{{ lang._('每 12 小时') }}</option>
                                     <option value="o24h">{{ lang._('每 24 小时') }}</option>
                                 </select>
                             </div>
                         </div>
-                        <div class="col-xs-12 col-sm-6">
-                            <div class="form-group">
-                                <label>{{ lang._('策略来源') }}</label>
-                                <div class="mihomo-radio-cards" id="sub_strategy_cards">
-                                    <div class="mihomo-radio-card" data-val="subscription">
-                                        <div class="mihomo-radio-indicator"><i class="fa fa-check"></i></div>
-                                        <div class="mihomo-radio-content">
-                                            <div class="mihomo-radio-title">{{ lang._('沿用订阅自带策略组与规则') }} <span class="label label-success" style="font-size: 11px;">{{ lang._('推荐') }}</span></div>
-                                            <div class="mihomo-radio-desc">{{ lang._('代理组与分流规则与客户端一致；缺失时自动回退插件模板。') }}</div>
-                                        </div>
-                                    </div>
-                                    <div class="mihomo-radio-card" data-val="template">
-                                        <div class="mihomo-radio-indicator"><i class="fa fa-check"></i></div>
-                                        <div class="mihomo-radio-content">
-                                            <div class="mihomo-radio-title">{{ lang._('插件内置策略组与规则') }}</div>
-                                            <div class="mihomo-radio-desc">{{ lang._('忽略订阅内部策略，由插件内置模板生成。') }}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <select id="sub_strategy" class="form-control" style="display: none;">
-                                    <option value="subscription">{{ lang._('沿用订阅自带策略组与规则（推荐）') }}</option>
-                                    <option value="template">{{ lang._('插件内置策略组与规则') }}</option>
-                                </select>
-                            </div>
-                        </div>
                     </div>
 
-                    <div class="mihomo-toolbar" style="margin-top: 10px; margin-bottom: 20px;">
+                    <div class="mihomo-toolbar" style="margin-top: 10px; margin-bottom: 6px;">
                         <button class="btn btn-primary" id="btn_sub_save" type="button">
                             <b>{{ lang._('保存订阅') }}</b> <i id="btn_sub_save_progress"></i>
                         </button>
@@ -205,130 +286,23 @@
                             <i class="fa fa-cloud-download" id="btn_sub_update_icon"></i> {{ lang._('立即更新') }}
                         </button>
                     </div>
+                    <div id="sub_state_message" class="text-muted" style="font-size: 12px; margin-bottom: 18px;"></div>
 
-                    <!-- 最近更新结果（紧凑 2 列 kv） -->
-                    <div id="sub_state">
-                        <div class="mihomo-section-title">
-                            <i class="fa fa-history"></i> {{ lang._('最近更新状态') }}
-                        </div>
-                        <table class="table mihomo-kv">
-                            <tbody>
-                                <tr>
-                                    <th>{{ lang._('更新时间') }}</th>
-                                    <td id="sub_state_time">-</td>
-                                    <th>{{ lang._('更新结果') }}</th>
-                                    <td><span id="sub_state_result" class="label label-default">-</span></td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('节点数量') }}</th>
-                                    <td id="sub_state_nodes">-</td>
-                                    <th>{{ lang._('策略来源') }}</th>
-                                    <td id="sub_state_strategy">-</td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('策略组数量') }}</th>
-                                    <td id="sub_state_groups">-</td>
-                                    <th>{{ lang._('分流规则数量') }}</th>
-                                    <td id="sub_state_rules">-</td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('结果消息') }}</th>
-                                    <td colspan="3" id="sub_state_message">-</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                    <div class="mihomo-section-title">
+                        <i class="fa fa-history"></i> {{ lang._('最近更新状态') }}
                     </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Tab 4：面板与 API -->
-        <div class="tab-pane" id="tab_api">
-            <div class="mihomo-card">
-                <div class="mihomo-card-head">
-                    <h2 class="mihomo-card-title">
-                        <span><i class="fa fa-tachometer"></i> {{ lang._('面板与 API') }} <span id="api_header_port" class="badge" style="margin-left: 8px; font-weight: normal; background-color: #f0f0f0; color: #555555;"></span></span>
-                    </h2>
-                </div>
-                <div class="mihomo-card-body">
-                    <div class="mihomo-section">
-                        <div class="mihomo-section-title">
-                            <i class="fa fa-link"></i> {{ lang._('访问地址与密钥') }}
+                    <div id="sub_state" class="mihomo-kv-rows" style="max-width: 560px;">
+                        <div>
+                            <span class="mh-kv-label">{{ lang._('更新时间') }}</span>
+                            <span class="mh-kv-value mihomo-mono" id="sub_state_time">-</span>
                         </div>
-                        <table class="table mihomo-kv">
-                            <tbody>
-                                <tr>
-                                    <th>{{ lang._('内置面板') }}</th>
-                                    <td>
-                                        <a id="api_bundled_link" href="#" target="_blank" rel="noopener noreferrer">-</a>
-                                        <button type="button" class="btn btn-xs btn-default mihomo-copy-btn" id="btn_copy_api_endpoint" style="margin-left: 8px;">
-                                            <i class="fa fa-clipboard"></i> {{ lang._('复制端点') }}
-                                        </button>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('API 端点') }}</th>
-                                    <td>
-                                        <code id="api_endpoint_display" class="mihomo-mono">-</code>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('当前监听') }}</th>
-                                    <td>
-                                        <span id="api_bind_badge" class="label label-default mihomo-mono">-</span>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th>{{ lang._('认证密钥') }}</th>
-                                    <td>
-                                        <code id="api_secret_masked" class="mihomo-mono" style="font-size: 13px;">{{ lang._('加载中...') }}</code>
-                                        <div style="margin-top: 6px;">
-                                            <button class="btn btn-xs btn-default" id="btn_secret_reveal" type="button">
-                                                <i class="fa fa-eye"></i> {{ lang._('查看密钥') }}
-                                            </button>
-                                            <button class="btn btn-xs btn-warning" id="btn_secret_generate" type="button" style="margin-left: 6px;">
-                                                <i class="fa fa-refresh"></i> {{ lang._('生成新密钥') }}
-                                            </button>
-                                        </div>
-                                        <div class="text-muted" id="api_secret_help" style="font-size: 12px; margin-top: 6px;">
-                                            {{ lang._('用于登录 Web 控制台及外部控制器 API。修改后将同步写入配置并热重载生效。') }}
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                        <div id="api_wan_warn" class="mihomo-callout-warning" style="display: none; margin-top: 10px; margin-bottom: 0;">
-                            <i class="fa fa-exclamation-triangle"></i> {{ lang._('已监听全部网络接口（0.0.0.0）。建议仅在 LAN 接口监听并确保 WAN 防火墙阻断未授权流量。') }}
+                        <div>
+                            <span class="mh-kv-label">{{ lang._('更新结果') }}</span>
+                            <span class="mh-kv-value"><span id="sub_state_result" class="label label-default">-</span></span>
                         </div>
-                    </div>
-
-                    <!-- 自定义密钥（折叠） -->
-                    <div class="mihomo-section" style="margin-top: 15px;">
-                        <a href="#collapse_secret_custom" data-toggle="collapse" class="text-muted" style="text-decoration: none; font-size: 13px;">
-                            <i class="fa fa-caret-right"></i> <b>{{ lang._('自定义密钥设置') }}</b>
-                        </a>
-                        <div id="collapse_secret_custom" class="collapse" style="margin-top: 10px;">
-                            <div class="form-group" style="margin-bottom: 0;">
-                                <label for="api_secret_custom">{{ lang._('设置自定义密钥') }}</label>
-                                <div class="input-group" style="max-width: 480px;">
-                                    <input type="text" class="form-control" id="api_secret_custom" autocomplete="off" spellcheck="false"/>
-                                    <span class="input-group-btn">
-                                        <button class="btn btn-primary" id="btn_secret_apply" type="button">
-                                            <b>{{ lang._('应用') }}</b> <i id="btn_secret_apply_progress"></i>
-                                        </button>
-                                    </span>
-                                </div>
-                                <span class="help-block" style="font-size: 12px; margin-bottom: 0;">{{ lang._('4-128 个字符；仅允许字母、数字以及 . _ ~ @ # % ^ + = : ; , ! ? * -') }}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 客户端访问指南 -->
-                    <div class="mihomo-guide" id="api_dashboard_guide">
-                        <strong><i class="fa fa-info-circle"></i> {{ lang._('客户端接入指南') }}</strong>
-                        <div id="api_guide_content" style="margin-top: 6px;">
-                            <p>{{ lang._('内置面板') }}：<a href="#" class="api_link_preview" target="_blank" rel="noopener noreferrer">http://<span class="api_disp_host">-</span>:<span class="api_disp_port">-</span>/ui/</a></p>
-                            <p>{{ lang._('Metacubexd / 外部客户端') }}：{{ lang._('服务器') }} <code>http://<span class="api_disp_host">-</span>:<span class="api_disp_port">-</span></code>，{{ lang._('密钥') }}：{{ lang._('点击 [查看密钥] 复制') }}</p>
+                        <div>
+                            <span class="mh-kv-label">{{ lang._('节点 / 策略组 / 分流规则') }}</span>
+                            <span class="mh-kv-value mihomo-mono" id="sub_state_counts">-</span>
                         </div>
                     </div>
                 </div>
@@ -348,6 +322,20 @@ $(function () {
 
     function textBlock(text) {
         return $('<div></div>').text(String(text));
+    }
+
+    /* OPNsense Mvc\Response 会对 API 输出做 htmlspecialchars，取回的可读文本需还原实体。
+       用显式字符串替换还原，不走 DOM 解析，避免把服务端文本当 HTML 注入页面 */
+    function mhFromEntities(text) {
+        if (!text) {
+            return '';
+        }
+        return String(text)
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#0?39;/g, "'")
+            .replace(/&amp;/g, '&');
     }
 
     function messageLines(lines) {
@@ -373,12 +361,14 @@ $(function () {
         $('.selectpicker').selectpicker('refresh');
         if ($(e.target).attr('href') === '#tab_overview') {
             updateStatus(true);
+            loadCoreMode();
         }
     });
 
     document.addEventListener('visibilitychange', function () {
         if (!document.hidden && isOverviewActive()) {
             updateStatus(true);
+            loadCoreMode();
         }
     });
 
@@ -429,25 +419,81 @@ $(function () {
         setTimeout(function () { $t.hide(); }, 4000);
     }
 
-    /* ---------- 概览：状态 / 主按钮切换 ---------- */
+    /* ---------- 概览：状态 / 指标 / 主按钮（原运行状态页已并入此处） ---------- */
 
-    function renderOverviewState(running) {
-        var $dot = $('#ov_state_dot');
-        $dot.removeClass('is-running is-stopped is-error');
+    var coreModeNames = {
+        'rule': '{{ lang._("规则分流") }}',
+        'global': '{{ lang._("全局代理") }}',
+        'direct': '{{ lang._("直连") }}'
+    };
+
+    var stateMeta = {
+        'RUNNING': { text: '{{ lang._("运行中") }}', icon: 'fa-check-circle', cls: 'label-success', dot: 'is-running' },
+        'STARTING': { text: '{{ lang._("启动中") }}', icon: 'fa-spinner fa-spin', cls: 'label-info', dot: 'is-running' },
+        'STOPPING': { text: '{{ lang._("停止中") }}', icon: 'fa-spinner fa-spin', cls: 'label-warning', dot: 'is-stopped' },
+        'DEGRADED': { text: '{{ lang._("降级") }}', icon: 'fa-exclamation-circle', cls: 'label-warning', dot: 'is-error' },
+        'FAILED': { text: '{{ lang._("故障") }}', icon: 'fa-times-circle', cls: 'label-danger', dot: 'is-error' },
+        'DISABLED': { text: '{{ lang._("已禁用") }}', icon: 'fa-ban', cls: 'label-default', dot: 'is-stopped' }
+    };
+
+    function renderOverview(data) {
+        data = data || {};
+        var state = String(data.state || '').toUpperCase();
+        var running = state === 'RUNNING';
+        var meta = stateMeta[state] || { text: '{{ lang._("已停止") }}', icon: 'fa-power-off', cls: 'label-default', dot: 'is-stopped' };
+
+        $('#ov_state_dot').removeClass('is-running is-stopped is-error').addClass(meta.dot);
+        $('#ov_state_text').empty()
+            .append($('<i></i>').addClass('fa ' + meta.icon).css('margin-right', '4px'))
+            .append(document.createTextNode(meta.text));
+
+        /* 接入方式徽章（悬停看隧道类型） */
+        var $access = $('#service_status_badge').removeClass('label-default label-success label-primary label-info label-danger');
+        var accessText = '{{ lang._("直连") }}';
+        var accessCls = 'label-default';
         if (running) {
-            $dot.addClass('is-running');
-            $('#ov_state_text').text('{{ lang._("运行中") }}');
-            $('#btn_start').hide();
-            $('#btn_stop').show();
-            $('#btn_restart').show();
-            $('#btn_reload').show();
-        } else {
-            $dot.addClass('is-stopped');
-            $('#ov_state_text').text('{{ lang._("已停止") }}');
-            $('#btn_start').show();
-            $('#btn_stop').hide();
-            $('#btn_restart').hide();
-            $('#btn_reload').hide();
+            if (data.transport_mode === 'transparent') {
+                accessText = '{{ lang._("透明代理") }}';
+                accessCls = 'label-info';
+            } else {
+                accessText = '{{ lang._("仅代理") }}';
+                accessCls = 'label-primary';
+            }
+        }
+        var accessDetail = running && data.tun_kind ? accessText + ' (' + data.tun_kind + ')' : accessText;
+        $access.addClass(accessCls).text(accessDetail).attr('title', accessDetail);
+
+        /* 主按钮可见性 */
+        $('#btn_start').toggle(!running);
+        $('#btn_stop').toggle(running);
+        $('#btn_restart').toggle(running);
+        $('#btn_reload').toggle(running);
+
+        /* 运行指标 */
+        $('#ov_uptime').text(data.uptime || '-');
+        $('#ov_memory').text(data.memory || '-');
+        $('#ov_pid').text(data.pid ? String(data.pid) : '-');
+        var versionText = (data.plugin_version || '-') + ' / ' + (data.mihomo_version || '-');
+        $('#ov_versions').text(versionText).attr('title', versionText);
+
+        var tunMap = {
+            up: { text: '{{ lang._("正常") }}', cls: 'label-success' },
+            down: { text: '{{ lang._("断开") }}', cls: 'label-danger' },
+            other: { text: 'SOCKS', cls: 'label-default' }
+        };
+        var tunKey = data.tun_status === 'UP' ? 'up' : (data.tun_status === 'DOWN' ? 'down' : 'other');
+        $('#ov_tun').removeClass('label-default label-success label-danger')
+            .addClass(tunMap[tunKey].cls).text(tunMap[tunKey].text);
+        $('#ov_api').removeClass('label-default label-success label-danger')
+            .addClass(data.api_status === 'UP' ? 'label-success' : 'label-danger')
+            .text(data.api_status === 'UP' ? '{{ lang._("正常") }}' : '{{ lang._("不可用") }}');
+
+        /* 内核模式：配置默认提示 + 服务未运行时禁用切换 */
+        var cfgMode = data.core_mode || 'rule';
+        $('#core_mode_config').text('{{ lang._("配置默认：") }}' + (coreModeNames[cfgMode] || cfgMode));
+        $('#ov_core_mode_select, #btn_core_mode_apply').prop('disabled', !running);
+        if (!running) {
+            $('#core_mode_msg').removeClass('text-success text-danger').addClass('text-muted').text('{{ lang._("服务未运行") }}');
         }
     }
 
@@ -456,19 +502,8 @@ $(function () {
         if (force !== true && (!isOverviewActive() || document.hidden)) {
             return;
         }
-        ajaxGet('/api/mihomo/service/status', {}, function (data) {
-            var running = (data && data.status === 'running');
-            var $badge = $('#service_status_badge');
-            if (running) {
-                $badge.removeClass('label-default label-danger').addClass('label-success').empty()
-                    .append($('<i class="fa fa-check-circle"></i>'))
-                    .append(' ' + '{{ lang._("运行中") }}');
-            } else {
-                $badge.removeClass('label-default label-success').addClass('label-danger').empty()
-                    .append($('<i class="fa fa-times-circle"></i>'))
-                    .append(' ' + '{{ lang._("已停止") }}');
-            }
-            renderOverviewState(running);
+        ajaxGet('/api/mihomo/status/getMihomoStatus', {}, function (data) {
+            renderOverview(data);
         });
     }
 
@@ -483,11 +518,7 @@ $(function () {
         }
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(text).then(function () {
-                BootstrapDialog.show({
-                    type: BootstrapDialog.TYPE_INFO,
-                    title: '{{ lang._("复制成功") }}',
-                    message: textBlock(successMsg || '{{ lang._("内容已复制到剪贴板。") }}')
-                });
+                mhToast(successMsg || '{{ lang._("内容已复制到剪贴板。") }}', 'success');
             }, function () {
                 fallbackCopy(text, successMsg);
             });
@@ -502,11 +533,7 @@ $(function () {
         $temp.select();
         try {
             document.execCommand('copy');
-            BootstrapDialog.show({
-                type: BootstrapDialog.TYPE_INFO,
-                title: '{{ lang._("复制成功") }}',
-                message: textBlock(successMsg || '{{ lang._("内容已复制到剪贴板。") }}')
-            });
+            mhToast(successMsg || '{{ lang._("内容已复制到剪贴板。") }}', 'success');
         } catch (e) {
             BootstrapDialog.show({
                 type: BootstrapDialog.TYPE_WARNING,
@@ -523,12 +550,9 @@ $(function () {
 
         if (!currentApiPort) {
             $('#api_header_port').text('');
-            $('.api_disp_port').text('-');
-            $('.api_disp_host').text('-');
             $('#api_endpoint_display').text('-');
             $('#api_bind_badge').text('-');
             $('#api_bundled_link').attr('href', '#').text('-').css('pointer-events', 'none').css('text-decoration', 'none');
-            $('.api_link_preview').attr('href', '#').css('pointer-events', 'none').css('text-decoration', 'none');
             $('#btn_copy_api_endpoint').prop('disabled', true);
             $('#api_wan_warn').hide();
             return;
@@ -539,19 +563,12 @@ $(function () {
         var bundledUrl = endpointUrl + '/ui/';
 
         $('#api_header_port').text('{{ lang._("端口") }} ' + currentApiPort);
-        $('.api_disp_host').text(dispHost);
-        $('.api_disp_port').text(currentApiPort);
         $('#api_endpoint_display').text(endpointUrl);
         $('#api_bind_badge').text((currentApiBind || '-') + ':' + currentApiPort);
 
         $('#api_bundled_link')
             .attr('href', bundledUrl)
             .text(bundledUrl)
-            .css('pointer-events', 'auto')
-            .css('text-decoration', 'underline');
-
-        $('.api_link_preview')
-            .attr('href', bundledUrl)
             .css('pointer-events', 'auto')
             .css('text-decoration', 'underline');
 
@@ -579,38 +596,53 @@ $(function () {
             var bind = gen.api_bind;
             var port = gen.api_port;
             updateApiDisplay(bind, port);
-            /* 概览：接入方式 + 自启徽章（配置意图，实时态见运行状态页） */
-            /* OptionField 在 JSON 中是 {key:{value,selected}} 字典，取 selected===1 的键 */
-            var tm = '';
-            if (gen.transport_mode && typeof gen.transport_mode === 'object') {
-                $.each(gen.transport_mode, function (k, v) {
-                    if (v && (v.selected === 1 || v.selected === true || v.selected === '1')) {
-                        tm = String(k);
-                        return false;
-                    }
-                });
-            } else {
-                tm = String(gen.transport_mode || '');
-            }
-            $('#ov_transport').text(tm === 'transparent' ? '{{ lang._("透明代理") }}' : (tm === 'proxy' ? '{{ lang._("仅代理") }}' : '-'));
+            /* 概览：开机自启（配置意图；运行态接入方式与内核模式由 getMihomoStatus 驱动） */
             $('#ov_autostart').text(flagEnabled(gen.enabled) === '1' ? '{{ lang._("开") }}' : '{{ lang._("关") }}');
         });
     }
 
+    /* 内核模式：运行时模式下拉（原运行状态页功能并入概览） */
     function loadCoreMode() {
         ajaxGet('/api/mihomo/status/getMode', {}, function (data) {
-            var names = {
-                rule: '{{ lang._("规则分流") }}',
-                global: '{{ lang._("全局代理") }}',
-                direct: '{{ lang._("直连") }}'
-            };
-            var txt = '-';
-            if (data && data.reachable && data.mode && names[data.mode]) {
-                txt = names[data.mode];
+            var $msg = $('#core_mode_msg');
+            if (data && data.reachable && data.mode) {
+                $('#ov_core_mode_select').val(data.mode);
+                if ($msg.hasClass('text-danger')) {
+                    $msg.removeClass('text-danger text-muted').text('');
+                }
+            } else {
+                var note = (data && data.note) ? data.note : '{{ lang._("API 不可达") }}';
+                $msg.removeClass('text-success text-muted').addClass('text-danger').text(note);
             }
-            $('#ov_core_mode').text(txt);
         });
     }
+
+    $('#btn_core_mode_apply').click(function () {
+        var selectedMode = $('#ov_core_mode_select').val();
+        var $btn = $(this);
+        var $msg = $('#core_mode_msg');
+        $btn.prop('disabled', true);
+        $msg.removeClass('text-danger text-success').addClass('text-muted').text('{{ lang._("切换中...") }}');
+        ajaxCall('/api/mihomo/status/setMode', { mode: selectedMode }, function (res) {
+            $btn.prop('disabled', false);
+            if (res && res.status === 'ok') {
+                $msg.removeClass('text-danger text-muted').addClass('text-success').text(res.message || '{{ lang._("切换成功") }}');
+                setTimeout(function () {
+                    updateStatus(true);
+                    loadCoreMode();
+                }, 500);
+            } else {
+                var err = (res && res.message) ? res.message : '{{ lang._("切换失败") }}';
+                $msg.removeClass('text-success text-muted').addClass('text-danger').text(err);
+            }
+        });
+    });
+
+    $('#btn_ov_refresh').click(function () {
+        updateStatus(true);
+        loadCoreMode();
+        loadSubscription(false);
+    });
 
     function showSecretDialog(title, secret) {
         var $input = $('<input type="text" class="form-control" readonly style="font-family: Menlo, Monaco, Consolas, monospace;"/>').val(secret);
@@ -633,19 +665,25 @@ $(function () {
     mapDataToFormUI({'frm_general_settings': '/api/mihomo/general/getGeneral'}).done(function () {
         formatTokenizersUI();
         $('.selectpicker').selectpicker('refresh');
+        classifyFormRows();
         updateStatus(true);
     });
+
+    /* 宽屏两列表单：仅 checkbox 行占满整行（长 help 行在两列内换行展示） */
+    function classifyFormRows() {
+        $('#frm_general_settings table.table > tbody > tr').each(function () {
+            if ($(this).find('input[type="checkbox"]').length > 0) {
+                $(this).addClass('mh-span-full');
+            }
+        });
+    }
 
     /* ---------- 服务控制 ---------- */
 
     function callServiceAction(action) {
         ajaxCall('/api/mihomo/service/' + action, {}, function (data) {
             if (data && data.status === 'ok') {
-                BootstrapDialog.show({
-                    type: BootstrapDialog.TYPE_SUCCESS,
-                    title: '{{ lang._("服务控制") }}',
-                    message: textBlock(data.response || '{{ lang._("操作执行成功。") }}')
-                });
+                mhToast(data.response || '{{ lang._("操作执行成功。") }}', 'success');
             } else {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_DANGER,
@@ -653,7 +691,10 @@ $(function () {
                     message: textBlock((data && data.message) ? data.message : '{{ lang._("操作失败。") }}')
                 });
             }
-            setTimeout(function () { updateStatus(true); }, 1000);
+            setTimeout(function () {
+                updateStatus(true);
+                loadCoreMode();
+            }, 1000);
         });
     }
 
@@ -758,6 +799,13 @@ $(function () {
         return Math.floor(h / 24) + ' {{ lang._("天前") }}';
     }
 
+    function fmtNum(v) {
+        if (v === undefined || v === null || v === '') {
+            return '-';
+        }
+        return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
     function renderLastUpdate(lastUpdate) {
         var $badge = $('#sub_state_result');
         var $ovBadge = $('#ov_sub_result');
@@ -765,29 +813,21 @@ $(function () {
         $ovBadge.removeClass('label-default label-success label-danger label-warning');
         if (!lastUpdate || typeof lastUpdate !== 'object') {
             subLastUpdateTime = null;
-            $('#sub_state_time').text('-');
-            $('#sub_state_nodes').text('-');
-            $('#sub_state_strategy').text('-');
-            $('#sub_state_groups').text('-');
-            $('#sub_state_rules').text('-');
-            $('#sub_state_message').text('-');
+            $('#sub_state_time').text('-').attr('title', '');
+            $('#sub_state_counts').text('-');
             $badge.addClass('label-default').text('-');
             $('#ov_nodes').text('-');
             $('#ov_groups').text('-');
             $('#ov_rules').text('-');
-            $('#ov_sub_masked').text('-');
             $('#ov_sub_result').addClass('label-default').text('-');
             $('#ov_sub_time').text('-');
-            $('#ov_sub_msg').hide();
             return;
         }
         subLastUpdateTime = lastUpdate.time ? String(lastUpdate.time) : null;
-        $('#sub_state_time').text(lastUpdate.time ? String(lastUpdate.time) : '-');
-        $('#sub_state_nodes').text((lastUpdate.nodes !== undefined && lastUpdate.nodes !== null) ? String(lastUpdate.nodes) : '-');
-        $('#sub_state_strategy').text(lastUpdate.strategy === 'subscription' ? '{{ lang._("订阅自带") }}' : '{{ lang._("插件模板") }}');
-        $('#sub_state_groups').text((lastUpdate.groups !== undefined && lastUpdate.groups !== null && lastUpdate.groups !== '') ? String(lastUpdate.groups) : '-');
-        $('#sub_state_rules').text((lastUpdate.rules !== undefined && lastUpdate.rules !== null && lastUpdate.rules !== '') ? String(lastUpdate.rules) : '-');
-        $('#sub_state_message').text(lastUpdate.message ? String(lastUpdate.message) : '-');
+        /* 时间：相对时间展示，悬停显示完整时间；数量统一千分位 */
+        $('#sub_state_time').text(relativeTime(lastUpdate.time))
+            .attr('title', lastUpdate.time ? String(lastUpdate.time).replace('T', ' ').replace('Z', ' (UTC)') : '');
+        $('#sub_state_counts').text(fmtNum(lastUpdate.nodes) + ' / ' + fmtNum(lastUpdate.groups) + ' / ' + fmtNum(lastUpdate.rules));
         var result = (lastUpdate.result ? String(lastUpdate.result) : '').toLowerCase();
         var resultText = '-';
         var resultClass = 'label-default';
@@ -804,44 +844,20 @@ $(function () {
         $badge.addClass(resultClass).text(resultText);
         $ovBadge.addClass(resultClass).text(resultText);
         /* 概览数字（骨架占位在此被 .text() 替换；千分位仅用于展示） */
-        function fmtNum(v) {
-            if (v === undefined || v === null || v === '') {
-                return '-';
-            }
-            return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        }
         $('#ov_nodes').text(fmtNum(lastUpdate.nodes));
         $('#ov_groups').text(fmtNum(lastUpdate.groups));
         $('#ov_rules').text(fmtNum(lastUpdate.rules));
         $('#ov_sub_time').text(relativeTime(lastUpdate.time));
-        var msg = lastUpdate.message ? String(lastUpdate.message) : '';
-        if (msg.length > 0) {
-            $('#ov_sub_msg').text(msg.length > 60 ? msg.slice(0, 60) + '...' : msg).show();
-        } else {
-            $('#ov_sub_msg').hide();
-        }
     }
-
-    function syncStrategyCards() {
-        var v = $('#sub_strategy').val() || 'subscription';
-        $('#sub_strategy_cards .mihomo-radio-card').each(function () {
-            $(this).toggleClass('is-active', $(this).attr('data-val') === v);
-        });
-    }
-
-    $('#sub_strategy_cards').on('click', '.mihomo-radio-card', function () {
-        $('#sub_strategy').val($(this).attr('data-val'));
-        syncStrategyCards();
-    });
 
     function applySubscription(sub) {
         sub = sub || {};
-        var masked = (typeof sub.url_masked === 'string') ? sub.url_masked : '';
-        subHasUrl = (flagEnabled(sub.has_url) === '1') || (masked.length > 0);
-        $('#sub_url_masked').text(masked.length > 0 ? masked : '{{ lang._("未配置") }}');
+        var url = mhFromEntities(sub.url);
+        subHasUrl = (flagEnabled(sub.has_url) === '1') || (url.length > 0);
+        $('#sub_url').val(url);
         if (subHasUrl) {
-            $('#sub_url').val('');
-            $('#sub_url_hint').removeClass('text-muted').addClass('text-info').text('{{ lang._("已配置订阅地址。留空则保持现有地址不变。") }}');
+            $('#sub_url_hint').removeClass('text-muted').addClass('text-info')
+                .text('{{ lang._("已配置订阅地址。修改后点击「保存订阅」生效；留空保存则保持现有地址不变。") }}');
         } else {
             $('#sub_url_hint').removeClass('text-info').addClass('text-muted').text('{{ lang._("请输入 https 订阅地址。") }}');
         }
@@ -851,8 +867,6 @@ $(function () {
             interval = 'o24h';
         }
         $('#sub_interval').val(interval);
-        $('#sub_strategy').val(sub.strategy === 'template' ? 'template' : 'subscription');
-        syncStrategyCards();
     }
 
     function loadSubscription(applyForm) {
@@ -875,6 +889,7 @@ $(function () {
             subPollTimer = null;
         }
         setSubUpdating(false);
+        $('#sub_state_message').text('');
         if (finished === true) {
             loadSubscription(false);
         }
@@ -933,8 +948,7 @@ $(function () {
         }
         var payload = {
             auto_update: $('#sub_auto_update').is(':checked') ? '1' : '0',
-            auto_interval: $('#sub_interval').val(),
-            strategy: $('#sub_strategy').val()
+            auto_interval: $('#sub_interval').val()
         };
         if (url.length > 0) {
             payload.url = url;
@@ -947,19 +961,12 @@ $(function () {
             $progress.removeClass('fa fa-spinner fa-pulse');
             $button.prop('disabled', false);
             if (data && data.status === 'ok') {
-                if (typeof data.url_masked === 'string' && data.url_masked.length > 0) {
-                    $('#sub_url_masked').text(data.url_masked);
-                }
                 if (url.length > 0) {
                     subHasUrl = true;
+                    $('#sub_url').val(url);
                 }
-                $('#sub_url').val('');
-                $('#sub_url_hint').removeClass('text-muted').addClass('text-info').text('{{ lang._("已配置订阅地址。留空则保持现有地址不变。") }}');
-                BootstrapDialog.show({
-                    type: BootstrapDialog.TYPE_SUCCESS,
-                    title: '{{ lang._("保存成功") }}',
-                    message: textBlock(data.message || '{{ lang._("订阅设置已保存。") }}')
-                });
+                $('#sub_url_hint').removeClass('text-muted').addClass('text-info').text('{{ lang._("已配置订阅地址。修改后点击「保存订阅」生效；留空保存则保持现有地址不变。") }}');
+                mhToast(data.message || '{{ lang._("订阅设置已保存。") }}', 'success');
                 loadSubscription(false);
             } else {
                 BootstrapDialog.show({
@@ -1078,11 +1085,7 @@ $(function () {
                 if (typeof data.secret_masked === 'string' && data.secret_masked.length > 0) {
                     $('#api_secret_masked').text(data.secret_masked);
                 }
-                BootstrapDialog.show({
-                    type: BootstrapDialog.TYPE_SUCCESS,
-                    title: '{{ lang._("保存成功") }}',
-                    message: textBlock(data.message || '{{ lang._("API 密钥已更新。") }}')
-                });
+                mhToast(data.message || '{{ lang._("API 密钥已更新。") }}', 'success');
             } else {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_DANGER,
@@ -1098,7 +1101,6 @@ $(function () {
     loadSubscription(true);
     loadSecretMasked();
     loadCoreMode();
-    syncStrategyCards();
     updateStatus(true);
     setInterval(updateStatus, 5000);
 });

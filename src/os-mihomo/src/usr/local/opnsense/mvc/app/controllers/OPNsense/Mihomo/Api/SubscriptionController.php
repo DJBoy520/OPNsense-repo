@@ -54,7 +54,8 @@ class SubscriptionController extends ApiControllerBase
 
     /**
      * 读取订阅配置与最近一次更新结果
-     * url 只返回掩码形式，避免把订阅 token 暴露给浏览器。
+     * url 明文返回供界面直接查看与编辑；注意 OPNsense Mvc\Response 会对输出做
+     * htmlspecialchars，前端取用前需还原 HTML 实体（见 index.volt 的 mhFromEntities）。
      */
     public function getAction()
     {
@@ -77,6 +78,7 @@ class SubscriptionController extends ApiControllerBase
             'status' => 'ok',
             'subscription' => [
                 'has_url' => $url !== '',
+                'url' => $url,
                 'url_masked' => $url !== '' ? $this->maskUrl($url) : '',
                 'auto_update' => (int)(string)$model->subscription->auto_update,
                 'auto_interval' => (string)$model->subscription->auto_interval,
@@ -204,6 +206,7 @@ class SubscriptionController extends ApiControllerBase
 
         return [
             'status' => 'ok',
+            'url' => $url,
             'url_masked' => $url !== '' ? $this->maskUrl($url) : '',
             'strategy' => $strategy,
             'strategy_cache' => is_file(self::STRATEGY_CACHE_FILE),
