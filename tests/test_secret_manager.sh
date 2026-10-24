@@ -194,6 +194,12 @@ echo "  [PASS] lock acquired, released, stale lock recovered, read-only path unl
 
 # Test 10: 安装初始化轮换策略——16 字符、[A-Za-z0-9]、必含大写/小写/数字
 echo "--> Test 10: generated secret policy (16 chars, upper+lower+digit)..."
+# 禁止对无限源 /dev/urandom 直接重定向后流式截断（BSD tr locale 陷阱 + pkg
+# 环境下挂死 pipe_read，均 2026-10-24 VM 实锤）；必须先 head -c 有限读取
+if grep -E "tr -dc .*< */dev/urandom" "$SECRET_MGR" | grep -q .; then
+    echo "FAIL: unbounded /dev/urandom redirect into tr (hang class); use head -c first"; exit 1
+fi
+grep -q "head -c 128 /dev/urandom" "$SECRET_MGR" || { echo "FAIL: finite urandom read missing"; exit 1; }
 i=0
 while [ "$i" -lt 10 ]; do
     sh "$SECRET_MGR" generate > /dev/null

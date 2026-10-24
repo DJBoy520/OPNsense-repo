@@ -20,10 +20,11 @@ generate_secret() {
     _pw=""
     _tries=0
     while [ "$_tries" -lt 100 ]; do
-        # LC_ALL=C 强制按字节处理：BSD tr 在 UTF-8 locale 下把 /dev/urandom
-        # 当多字节字符流解码，几乎不产出，字符类重试会变成永久空转烧 CPU
-        # （2026-10-24 VM 实锤）；迭代上限兜底，超限报错交由调用方降级处理
-        _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
+        # 有限读取模式，绝不对无限源用 `tr | head` 流式截断：BSD tr 在 UTF-8
+        # locale 下把 urandom 当多字节流解码几乎不产出（2026-10-24 VM 实锤）；
+        # 且 pkg 安装环境（stdio=/dev/null）下无限源+head 截断的管道曾挂死在
+        # pipe_read。head -c 128 先定长消费 urandom，全链必然终止。
+        _pw="$(LC_ALL=C head -c 128 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 16 || true)"
         [ "${#_pw}" -eq 16 ] || { _tries=$((_tries + 1)); continue; }
         printf '%s' "$_pw" | grep -q '[A-Z]' || { _tries=$((_tries + 1)); continue; }
         printf '%s' "$_pw" | grep -q '[a-z]' || { _tries=$((_tries + 1)); continue; }
