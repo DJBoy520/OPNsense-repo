@@ -70,6 +70,7 @@ chmod 0600 /usr/local/etc/mihomo/secret.key /usr/local/etc/mihomo/config.yaml /u
 # Legacy WebGUI cleanup（仅清理旧版遗留页面，不触碰其他插件）
 rm -f /usr/local/www/mihomo.php /usr/local/www/mihomo_logs.php /usr/local/www/mihomo_sub.php /usr/local/www/mihomo_sub_log.php
 rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json
+rm -rf /tmp/opnsense_template_cache 2>/dev/null || true
 
 # ---- Step 2.5: upgrade migration & reconcile before restart ----
 php -r '$db=$argv[1];$dp=$argv[2];$y=@file_get_contents("/usr/local/etc/mihomo/config.yaml");if($y&&preg_match("/^external-controller:[[:space:]]*[\x22\x27]?([^:\x22\x27[:space:]]+):([0-9]+)/m",$y,$m)){$yb=trim($m[1]);$yp=trim($m[2]);$c=@simplexml_load_file("/conf/config.xml");if($c){$mbNodes=$c->xpath("//OPNsense/mihomo/general/api_bind");$mb=!empty($mbNodes)?(string)$mbNodes[0]:$db;$mpNodes=$c->xpath("//OPNsense/mihomo/general/api_port");$mp=!empty($mpNodes)?(string)$mpNodes[0]:$dp;if($mb===$db&&$mp===$dp&&($yb!==$db||$yp!==$dp)){$doc=new DOMDocument();if($doc->load("/conf/config.xml")){$xp=new DOMXPath($doc);$gen=$xp->query("/opnsense/OPNsense/mihomo/general")->item(0);if($gen instanceof DOMElement){foreach(["api_bind"=>$yb,"api_port"=>$yp] as $k=>$v){$el=$xp->query("./".$k,$gen)->item(0);if($el instanceof DOMElement){$el->nodeValue=$v;}else{$gen->appendChild($doc->createElement($k,$v));}}$tmp="/conf/config.xml.os-mihomo-mig.tmp";if($doc->save($tmp)!==false){chmod($tmp,0640);rename($tmp,"/conf/config.xml");}}}}}}' -- "$DEFAULT_API_BIND" "$DEFAULT_API_PORT" >/dev/null 2>&1 || true

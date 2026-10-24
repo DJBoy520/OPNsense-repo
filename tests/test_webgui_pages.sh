@@ -254,6 +254,122 @@ for req_class in \
 done
 echo "  [PASS] styles.volt defines full card/stat/metric/kv/guide/proxy/picker CSS classes"
 
+# 1.3.0 Dashboard 化增量静态门禁（P3）
+# ④-d index.volt 4-Tab 结构、概览卡片 ID 与新增 DOM 元素断言
+echo "--> Test 8d: index.volt 1.3.0 Tab structure & element IDs..."
+# BS3 nav-tabs 与 4 个 tab-pane
+grep -q 'data-toggle="tab"' "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing data-toggle=\"tab\""; exit 1;
+}
+for tab_id in tab_overview tab_general tab_subscription tab_api; do
+    grep -q "$tab_id" "$INDEX_VOLT" || {
+        echo "FAIL: index.volt missing tab pane ID: $tab_id"; exit 1;
+    }
+done
+
+# 概览新 id 契约
+for ov_elem_id in \
+    ov_state_dot ov_state_text ov_transport ov_core_mode ov_autostart \
+    ov_nodes ov_groups ov_rules ov_sub_masked ov_sub_result \
+    ov_sub_time ov_sub_msg ov_btn_sub_update; do
+    grep -q "$ov_elem_id" "$INDEX_VOLT" || {
+        echo "FAIL: index.volt missing overview element ID: $ov_elem_id"; exit 1;
+    }
+done
+echo "  [PASS] index.volt contains 4 nav-tabs panes and all overview element IDs"
+
+# ④-e styles.volt 1.3.0 Design Tokens、关键帧动画与组件样式类断言
+echo "--> Test 8e: styles.volt 1.3.0 tokens & classes..."
+# 设计 Token 与品牌色声明/引用
+grep -q -- "--mh-brand:[[:space:]]*#d94f00" "$STYLES_VOLT" || {
+    echo "FAIL: styles.volt missing --mh-brand: #d94f00 token definition"; exit 1;
+}
+grep -q "var(--mh-brand)" "$STYLES_VOLT" || {
+    echo "FAIL: styles.volt missing var(--mh-brand) reference"; exit 1;
+}
+
+# 关键帧动画
+grep -q "@keyframes[[:space:]]\+mh-dot-pulse" "$STYLES_VOLT" || {
+    echo "FAIL: styles.volt missing @keyframes mh-dot-pulse"; exit 1;
+}
+grep -q "mh-shimmer" "$STYLES_VOLT" || {
+    echo "FAIL: styles.volt missing mh-shimmer keyframes or class"; exit 1;
+}
+
+# 新增样式类
+for mh_class in \
+    mihomo-status-dot mihomo-stat-card mihomo-radio-cards \
+    mihomo-modern-form mihomo-skeleton mihomo-save-toast; do
+    grep -q "\.$mh_class" "$STYLES_VOLT" || {
+        echo "FAIL: styles.volt missing CSS class .$mh_class"; exit 1;
+    }
+done
+echo "  [PASS] styles.volt defines 1.3.0 tokens, mh-dot-pulse/shimmer, and all new component classes"
+
+# ④-f index.volt 1.3.0 JS 交互契约断言
+echo "--> Test 8f: index.volt 1.3.0 JS interaction contracts..."
+grep -q "shown\.bs\.tab" "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing shown.bs.tab event handler"; exit 1;
+}
+grep -q "history\.replaceState" "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing history.replaceState for tab hash synchronization"; exit 1;
+}
+grep -q "visibilitychange" "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing visibilitychange listener for polling guard"; exit 1;
+}
+grep -q "selectpicker('refresh')" "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing selectpicker('refresh') on tab shown"; exit 1;
+}
+grep -q "BootstrapDialog\.confirm" "$INDEX_VOLT" || {
+    echo "FAIL: index.volt missing BootstrapDialog.confirm for service stop confirmation"; exit 1;
+}
+
+# 概览指标不走 5s 轮询守卫：不能有在 setInterval 中直接请求 subscription/get
+if python3 -c "
+import sys, re
+
+with open('$INDEX_VOLT', 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 检查 setInterval 回调体内是否直接调用 subscription/get
+# 匹配 setInterval(function...{ ... subscription/get ... }, ...)
+pattern = r'setInterval\s*\(\s*function\s*\([^)]*\)\s*\{[^}]*subscription/get[^}]*\}'
+if re.search(pattern, content, re.DOTALL):
+    print('FAIL: found subscription/get directly inside setInterval callback')
+    sys.exit(1)
+" ; then
+    echo "  [PASS] index.volt JS interaction contracts and polling guard verified"
+else
+    echo "FAIL: index.volt has forbidden direct subscription/get polling in setInterval"; exit 1
+fi
+
+# ④-g index.volt 负向断言：无 :9090、无 .html(/innerHTML、无 fetch(、无非 BMP emoji
+echo "--> Test 8g: index.volt negative assertions (security/standards)..."
+if grep -q ":9090" "$INDEX_VOLT"; then
+    echo "FAIL: index.volt contains hardcoded :9090 literal"; exit 1
+fi
+if grep -E "\.html\(|innerHTML" "$INDEX_VOLT" >/dev/null 2>&1; then
+    echo "FAIL: index.volt contains forbidden .html() or innerHTML assignment"; exit 1
+fi
+if grep -E "\bfetch\(" "$INDEX_VOLT" >/dev/null 2>&1; then
+    echo "FAIL: index.volt contains forbidden fetch() API"; exit 1
+fi
+
+python3 - "$INDEX_VOLT" <<'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8', errors='ignore') as fh:
+    content = fh.read()
+
+# 扫描非 BMP 字符（emoji）
+non_bmp = re.findall(r'[^\u0000-\uFFFF]', content)
+if non_bmp:
+    print(f"FAIL: {path} contains non-BMP characters/emojis: {set(non_bmp)}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+echo "  [PASS] index.volt negative assertions passed (no :9090, no .html/innerHTML, no fetch, no non-BMP emojis)"
+
 # ⑤ setup_firewall.php 不含 port 9090
 FW_PHP="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/mihomo/setup_firewall.php"
 [ -f "$FW_PHP" ] || { echo "FAIL: missing setup_firewall.php"; exit 1; }
