@@ -1,7 +1,7 @@
 # os-mihomo 面板化增强设计方案 v2（F1~F4 · 吸收 DeepSeek BLOCK 审核后的修订版）
 
 > v1（DESIGN-panel-features.md）被 DeepSeek 审核 BLOCK（31 条发现，核心：pfctl 整表重载丢 NAT、env 单引号注入可 root 执行、升级覆盖配置、watchdog 语义冲突）。本 v2 为**唯一有效设计**，v1 保留作审核对照。Gemini 审核结论待出，出后合并。
-> 实施前必读：docs/HANDOFF-20261017.md（坑位清单）。基线 1.0.4（内核 v1.19.30）。
+> 实施前必读：内部交接文档（不随公开仓库分发）。基线 1.0.4（内核 v1.19.30）。
 
 ## D1（原 F1）订阅管理面板化
 
@@ -77,7 +77,7 @@
 
 两家在核心结论完全收敛：标准 plugin filter 钩子（registerAnchor head+quick）替代任何主规则集篡改；订阅更新异步化+轮询；env 注入强校验+转义；F4 PRE_INSTALL 快照+build.sh 补 pre-install 段。以下为 Gemini 独有补充，已并入上文对应章节：
 
-1. **anchor bypass 强制清单（防管理员锁死，严禁可选）**：目的=本机自身地址（任意端口，覆盖 WebGUI 8443/443/80、SSH 22、9090）、网关 IP、RFC1918、组播/广播、DHCP 67/68。anchor 只放 pass/route-to，禁止 block/reject。
+1. **anchor bypass 强制清单（防管理员锁死，严禁可选）**：目的=本机自身地址（任意端口，覆盖 WebGUI 8443/443/80、SSH 22、API 端口默认 9090）、网关 IP、RFC1918、组播/广播、DHCP 67/68。anchor 只放 pass/route-to，禁止 block/reject。
 2. **F1 长动作**：PHP 侧同时显式 `set_time_limit(≥300)`；前端 Web 服务器超时配置一并核对。
 3. **F1 env 写入**：`filter_var($url, FILTER_VALIDATE_URL)` + scheme https 强制 + `str_replace("'", "'\\''", $url)` 转义 + 拒绝 CR/LF。
 4. **F3 rules-apply**：保存前必须离线跑 `mihomo -t` 编译级预检、失败拒存；缓存缺失时优雅降级为自动触发一次在线订阅更新；与 sub-update 强制共用 LOCK。
@@ -96,7 +96,7 @@
    - `/usr/local/etc/mihomo/setup.sh`（随包）：独立入口，装包后可随时重跑改设置；编排 sub-env-write → mihomo_setup.php（模型+Cron）→ filter reload → transport-enable → 订阅拉取 → 终检报告。
    - `mihomo_setup.php`（随包）：CLI 合法引导 = `require_once('script/load_phalcon.php')`（核心 include_path 自带），经 MVC 模型 API 写 `//OPNsense/mihomo`（订阅字段 + transport_mode）与 `//OPNsense/cron`（自动更新任务 + **watchdog 每分钟常驻任务**，fail-open 引擎从此有人兜底）——红线机制不破。
    - DNS 无缝：生产 AdGuardHome 上游本就指向 127.0.0.1:1053，mihomo 接管同端口，迁移零 DNS 改动；LAN 客户端网关保持 .2 不变，零客户端配置。
-   - 已验证锚点：load_phalcon.php 为 OPNsense 核心 CLI 引导（ntpd_status.php 等核心脚本同款，192.168.30.159 实机核实）。
+   - 已验证锚点：load_phalcon.php 为 OPNsense 核心 CLI 引导（ntpd_status.php 等核心脚本同款，测试 VM 实机核实）。
 
 1. **D2 bypass 改为表排除法**（替代 D2 原文「bypass 逐条 quick pass 规则」）：anchor 内的 route-to 规则写成 `to ! <mihomo_bypass>`（表内含本机地址、网关、RFC1918、组播 224/4、240/4、255.255.255.255、0.0.0.0/8），不匹配的包自然落回主规则集。原因：原方案 bypass pass 带 quick 会先于用户策略命中，把管理员自己的 block 规则短路掉（比如对特定 LAN 客户端的封锁）。Gemini 强制清单中的 bypass 目的地一个不少，只是实现更保守。
 2. **F1 cron 注册移到 MVC 控制器**（替代「sub-env-write 动作内用 Cron 模型 API」）：独立 CLI PHP 无法可靠引导 MVC 框架；SubscriptionController::setAction 保存模型后直接经 `\OPNsense\Cron\Model` 注册/禁用每日任务（description 固定 `os-mihomo auto sub-update`），保存后 `cron regenerate`。红线不受影响（cron 仍经模型 API）。另：auto_update=0 时置 enabled=0 而非删除任务项（可逆、避免依赖不确定的 del API）。

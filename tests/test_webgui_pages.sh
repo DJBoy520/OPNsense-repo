@@ -199,13 +199,60 @@ grep -q "configdpRun('mihomo api-bind-apply'" "$GEN_CTRL" || {
 }
 echo "  [PASS] GeneralController includes active secret check and api-bind-apply"
 
-# ④ index.volt 不含 ":9090" 字面量
+# ④ index.volt 不含 ":9090" 字面量与硬编码主机端口回退
 INDEX_VOLT="$VIEW_DIR/index.volt"
 [ -f "$INDEX_VOLT" ] || { echo "FAIL: missing index.volt"; exit 1; }
 if grep -q ":9090" "$INDEX_VOLT"; then
     echo "FAIL: index.volt contains hardcoded :9090 literal"; exit 1;
 fi
-echo "  [PASS] index.volt has zero :9090 literals"
+if grep -E "'9090'|\"9090\"|'127\.0\.0\.1'|\"127\.0\.0\.1\"" "$INDEX_VOLT" >/dev/null 2>&1; then
+    echo "FAIL: index.volt contains hardcoded 9090 or 127.0.0.1 fallback literals"; exit 1;
+fi
+echo "  [PASS] index.volt has zero :9090 literals and no hardcoded JS port/bind fallback"
+
+# ④-b index.volt 新结构与 ID 断言（四张卡片、KV 布局与 API 控制元素）
+echo "--> Test 8b: index.volt structure & element IDs..."
+for elem_id in \
+    api_secret_masked btn_secret_reveal btn_secret_generate \
+    api_secret_custom btn_secret_apply api_bundled_link \
+    api_wan_warn api_header_port api_dashboard_guide \
+    api_guide_content api_secret_help api_endpoint_display \
+    btn_copy_api_endpoint api_bind_badge \
+    btn_start btn_stop btn_restart btn_reload service_status_badge \
+    frm_general_settings btn_save \
+    sub_url sub_url_hint sub_url_masked sub_auto_update sub_interval \
+    sub_strategy btn_sub_save btn_sub_update btn_sub_update_icon \
+    sub_state sub_state_time sub_state_result sub_state_nodes \
+    sub_state_strategy sub_state_groups sub_state_rules sub_state_message; do
+    grep -q "$elem_id" "$INDEX_VOLT" || {
+        echo "FAIL: index.volt missing required element/ID: $elem_id"; exit 1;
+    }
+done
+for class_name in \
+    mihomo-card mihomo-card-head mihomo-form-wrap mihomo-kv mihomo-guide mihomo-toolbar; do
+    grep -q "$class_name" "$INDEX_VOLT" || {
+        echo "FAIL: index.volt missing required class: $class_name"; exit 1;
+    }
+done
+echo "  [PASS] index.volt contains all required card structures, element IDs and classes"
+
+# ④-c styles.volt 新类体系静态断言
+echo "--> Test 8c: styles.volt class system..."
+STYLES_VOLT="$VIEW_DIR/styles.volt"
+[ -f "$STYLES_VOLT" ] || { echo "FAIL: missing styles.volt"; exit 1; }
+for req_class in \
+    mihomo-card mihomo-card-head mihomo-card-title mihomo-card-body \
+    mihomo-stat-grid mihomo-stat mihomo-stat-label mihomo-stat-value \
+    mihomo-metric-grid mihomo-metric mihomo-kv mihomo-section \
+    mihomo-guide mihomo-mode-row mihomo-chips mihomo-chip \
+    mihomo-proxy-layout mihomo-group-list mihomo-group-item \
+    mihomo-node-grid mihomo-node mihomo-delay mihomo-picker-search \
+    mihomo-picker-list mihomo-picker-item mihomo-copy-btn mihomo-empty; do
+    grep -q "\.$req_class" "$STYLES_VOLT" || {
+        echo "FAIL: styles.volt missing CSS class .$req_class"; exit 1;
+    }
+done
+echo "  [PASS] styles.volt defines full card/stat/metric/kv/guide/proxy/picker CSS classes"
 
 # ⑤ setup_firewall.php 不含 port 9090
 FW_PHP="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/mihomo/setup_firewall.php"

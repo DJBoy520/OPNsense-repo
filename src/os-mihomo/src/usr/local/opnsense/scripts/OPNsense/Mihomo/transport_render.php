@@ -4,14 +4,14 @@
  * transport_render.php - D2 PF anchor 渲染器
  *
  * 用法：
- *   php transport_render.php [rules|lan-net|vars]    # 默认 rules
+ *   php transport_render.php [rules|lan-net|vars] [--template <path>]    # 默认 rules
  *
  * 数据来源优先级：
  *   环境变量覆盖（MIHOMO_LAN_IFACES / MIHOMO_LAN_NETS / MIHOMO_SELF_ADDRS /
  *   MIHOMO_GW_IP，空格分隔、按序对应） > /conf/config.xml 解析 > 报错 exit 1
  *
- * rules 模式读取 pf-transport.conf 模板，替换 __MIHOMO_SELF_ADDRS__ /
- * __MIHOMO_GW_IP__，并把 __MIHOMO_LAN_IF__ 注释占位替换为每个 LAN 接口一对
+ * rules 模式读取 pf-transport.conf 模板（--template 指定或运行期 /usr/local/etc/mihomo/pf-transport.conf），
+ * 替换 __MIHOMO_SELF_ADDRS__ / __MIHOMO_GW_IP__，并把 __MIHOMO_LAN_IF__ 注释占位替换为每个 LAN 接口一对
  * route-to 规则。模板中禁止出现以 block/reject 开头的规则行。
  *
  * 安全：所有进入 PF 规则的值（接口名、网段、地址）都经过白名单/IP 校验；
@@ -19,8 +19,7 @@
  * 不覆盖管理员策略。本脚本只读 /conf/config.xml，不写任何配置。
  */
 
-// 模板查找顺序：MIHOMO_PF_TEMPLATE 覆盖 > 运行期安装路径 > 开发机源码树（仅供本机测试）
-const DEV_PF_TEMPLATE = '/home/dj/WorkSpaces/opnsense-mihomo/src/os-mihomo/src/usr/local/etc/mihomo/pf-transport.conf';
+// 模板查找顺序：CLI --template <path> 参数 > 运行期安装路径
 const RUNTIME_PF_TEMPLATE = '/usr/local/etc/mihomo/pf-transport.conf';
 const CONFIG_XML = '/conf/config.xml';
 const DEFAULT_TUN_DEV = 'tun0';
@@ -375,20 +374,17 @@ function tun_gateway(): string
     return $value;
 }
 
-function resolve_template_path(): string
+function resolve_template_path(?string $cliTemplate = null): string
 {
-    $override = env_value('MIHOMO_PF_TEMPLATE');
-    if ($override !== null) {
-        if (!is_file($override) || !is_readable($override)) {
-            fail('无法读取 PF 模板：' . $override);
+    if ($cliTemplate !== null && $cliTemplate !== '') {
+        if (!is_file($cliTemplate) || !is_readable($cliTemplate)) {
+            fail('无法读取 PF 模板：' . $cliTemplate);
         }
-        return $override;
+        return $cliTemplate;
     }
-    // 运行期路径优先；开发机源码树路径仅在本机测试时兜底
-    foreach ([RUNTIME_PF_TEMPLATE, DEV_PF_TEMPLATE] as $candidate) {
-        if (is_file($candidate) && is_readable($candidate)) {
-            return $candidate;
-        }
+    // 运行期安装路径
+    if (is_file(RUNTIME_PF_TEMPLATE) && is_readable(RUNTIME_PF_TEMPLATE)) {
+        return RUNTIME_PF_TEMPLATE;
     }
     fail('找不到 PF 模板：' . RUNTIME_PF_TEMPLATE);
 }
@@ -412,9 +408,9 @@ function assert_safe_template(string $content): void
     }
 }
 
-function render_rules(): string
+function render_rules(?string $cliTemplate = null): string
 {
-    $templateFile = resolve_template_path();
+    $templateFile = resolve_template_path($cliTemplate);
     $content = file_get_contents($templateFile);
     if ($content === false) {
         fail('读取 PF 模板失败：' . $templateFile);
@@ -470,17 +466,26 @@ function render_rules(): string
     return implode("\n", $output);
 }
 
-if (count($argv) > 2) {
-    usage_error('用法：php transport_render.php [rules|lan-net|vars]');
-}
+$mode = 'rules';
+$cliTemplate = null;
 
-$mode = $argv[1] ?? 'rules';
-if (!in_array($mode, ['rules', 'lan-net', 'vars'], true)) {
-    usage_error('用法：php transport_render.php [rules|lan-net|vars]');
+$args = array_slice($argv, 1);
+while (count($args) > 0) {
+    $arg = array_shift($args);
+    if ($arg === '--template') {
+        if (count($args) === 0) {
+            usage_error('用法：php transport_render.php [rules|lan-net|vars] [--template <path>]');
+        }
+        $cliTemplate = array_shift($args);
+    } elseif (in_array($arg, ['rules', 'lan-net', 'vars'], true)) {
+        $mode = $arg;
+    } else {
+        usage_error('用法：php transport_render.php [rules|lan-net|vars] [--template <path>]');
+    }
 }
 
 if ($mode === 'rules') {
-    $output = render_rules();
+    $output = render_rules($cliTemplate);
     if (substr($output, -1) !== "\n") {
         $output .= "\n";
     }

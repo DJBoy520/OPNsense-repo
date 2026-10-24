@@ -20,6 +20,8 @@ STATUS=/var/db/os-mihomo/last-sub-update.json
 PHP_BIN=/usr/local/bin/php
 ANCHOR="mihomo-transport"
 CONFIG_FILE=/usr/local/etc/mihomo/config.yaml
+DEFAULT_API_HOST="127.0.0.1"
+DEFAULT_API_PORT=9090
 
 # 参数解析：环境变量优先，其次位置参数，最后缺省值
 URL="${MIHOMO_SETUP_URL:-${1:-}}"
@@ -159,10 +161,10 @@ echo "--> 步骤 5/5: 正在检查系统运行健康状态..."
 
 _sockstat="$(sockstat -l 2>/dev/null || true)"
 
-# external-controller 探测地址（§2.3 零硬编码）：0.0.0.0 归一化为回环；
-# 解析失败回退默认回环地址
-API_HOST="127.0.0.1"
-API_PORT=9090
+# external-controller 探测地址（§2.3 零硬编码）：从 config.yaml 读取；0.0.0.0 归一化为回环；
+# 缺失或解析失败时回退单一默认常量
+API_HOST="$DEFAULT_API_HOST"
+API_PORT="$DEFAULT_API_PORT"
 _api_raw="$(awk '
           BEGIN { sq = sprintf("%c", 39) }
   /^external-controller:[[:space:]]*/ {
@@ -186,7 +188,7 @@ if [ -n "$_api_raw" ]; then
     API_HOST="${_api_raw% *}"
     API_PORT="${_api_raw#* }"
     if [ "$API_HOST" = "0.0.0.0" ]; then
-        API_HOST="127.0.0.1"
+        API_HOST="$DEFAULT_API_HOST"
     fi
 fi
 

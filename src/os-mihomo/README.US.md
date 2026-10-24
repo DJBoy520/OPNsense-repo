@@ -55,7 +55,7 @@ Optional: `MIHOMO_SETUP_TRANSPORT` (transparent/proxy, default transparent) and 
 - **Official supply chain**: MetaCubeX releases only (pinned v1.19.30 compatible), SHA256-verified on both the archive and the unpacked binary; the zashboard UI is pinned and bundled, with zero runtime downloads.
 - **Atomic subscription updates**: https-only URLs, host-masked logs; composed configs are validated with `mihomo -t` before an atomic rename — a bad subscription can never overwrite a working configuration.
 - **Secret never in argv**: A CSPRNG-generated 32-byte API secret is injected through the environment (`ENVIRON`) and rotated via 0600 temp sed scripts; the WebGUI always displays it masked.
-- **Fail-Open bypass**: The watchdog probes process / API(9090) / DNS(1053) / socks(7891) and falls back to DIRECT; in transparent mode it also flushes the `mihomo-transport` anchor so LAN traffic reverts to the administrator's own policy.
+- **Fail-Open bypass**: The watchdog probes process / API / DNS(1053) / socks(7891) and falls back to DIRECT; in transparent mode it also flushes the `mihomo-transport` anchor so LAN traffic reverts to the administrator's own policy.
 - **Zero system intrusion**: Unbound is never touched; `/conf/config.xml` writes are limited to the `//OPNsense/mihomo` and `//OPNsense/cron` model nodes; PF involvement is limited to the plugin's own `mihomo-transport` anchor (pass/route-to only, block/reject forbidden) — the main ruleset is never modified.
 
 ## Notes
@@ -63,7 +63,7 @@ Optional: `MIHOMO_SETUP_TRANSPORT` (transparent/proxy, default transparent) and 
 1. Only x86_64 / amd64 is currently supported.
 2. After installation, no interface or firewall rule needs to be added manually. Edit the node information in the default configuration and use it directly.
 3. After debugging is complete, set the log level to `error` to avoid excessive long-term logs.
-4. The Clash API is force-bound to `127.0.0.1:9090` and is accessible via the built-in WebGUI panel. **Do not expose port 9090 to the WAN.**
+4. The Clash API defaults to listening on `127.0.0.1:9090` (configurable in the panel) and is accessible via the built-in WebGUI panel. **Do not expose the API port to the WAN.**
 5. mihomo's own TUN must stay disabled: FreeBSD has no sing-tun backend (issue #1157). In transparent mode the transport layer is hev-socks5-tunnel (`tun0`, requires the `if_tun` kernel module) owned by the plugin, plus the `mihomo-transport` PF anchor; in plain proxy mode neither is involved.
 6. This package never modifies Unbound. Point your existing DNS chain (Unbound forwarding, AdGuardHome upstream, etc.) at `127.0.0.1:1053` to use the mihomo DNS listener.
 
@@ -148,7 +148,7 @@ tail -f /var/log/mihomo.log
 Check listening ports:
 
 ```sh
-sockstat -4 -l | egrep ':53|:1053|:7891|:9090'
+sockstat -4 -l | egrep ':53|:1053|:7891|:<API_PORT>'
 ```
 
 Check the TUN interface:
@@ -181,7 +181,7 @@ Check watchdog / Fail-Open status:
 |---|---|
 | Proxy not connecting | `service mihomo status`; check `/var/log/mihomo.log` |
 | DNS resolution failing | `dig @127.0.0.1 -p 1053 example.com`; verify Unbound forwarding state |
-| API unreachable | API only listens on `127.0.0.1:9090`; access via the WebGUI panel, not directly from WAN |
+| API unreachable | API defaults to `127.0.0.1:9090` (configurable in the panel); access via the WebGUI panel or SSH tunnel, not directly from WAN |
 | Subscription update fails | Verify target URL certificate validity; check `/var/log/mihomo-sub.log` |
 | PF rules not applied | `pfctl -a mihomo -sr`; verify the anchor is loaded |
 | Fail-Open triggered | Watchdog has switched to direct routing; see `/var/log/mihomo-watchdog.log` for the trigger reason |

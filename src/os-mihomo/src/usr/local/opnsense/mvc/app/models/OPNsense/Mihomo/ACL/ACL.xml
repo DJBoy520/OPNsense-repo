@@ -38,6 +38,13 @@
             <pattern>api/mihomo/rules/*</pattern>
         </patterns>
     </page-services-mihomo-rules>
+    <page-services-mihomo-proxies>
+        <name>服务：Mihomo：策略组</name>
+        <patterns>
+            <pattern>ui/mihomo/proxies*</pattern>
+            <pattern>api/mihomo/proxies/*</pattern>
+        </patterns>
+    </page-services-mihomo-proxies>
     <page-services-mihomo-subscription>
         <name>服务：Mihomo：订阅管理</name>
         <patterns>

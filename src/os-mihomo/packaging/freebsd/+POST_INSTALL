@@ -10,6 +10,8 @@ echo "===> Configuring os-mihomo (socks-core mode)"
 
 CONF_DIR=/usr/local/etc/mihomo
 SNAP_DIR=/var/db/os-mihomo/pre-upgrade
+DEFAULT_API_PORT="9090"
+DEFAULT_API_BIND="127.0.0.1"
 
 mkdir -p /etc/rc.conf.d /var/db/os-mihomo
 touch /var/log/mihomo.log /var/log/mihomo_sub.log /var/log/mihomo_watchdog.log /var/log/mihomo_hev.log 2>/dev/null || true
@@ -70,7 +72,7 @@ rm -f /usr/local/www/mihomo.php /usr/local/www/mihomo_logs.php /usr/local/www/mi
 rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json
 
 # ---- Step 2.5: upgrade migration & reconcile before restart ----
-php -r '$y=@file_get_contents("/usr/local/etc/mihomo/config.yaml");if($y&&preg_match("/^external-controller:[[:space:]]*[\x22\x27]?([^:\x22\x27[:space:]]+):([0-9]+)/m",$y,$m)){$yb=trim($m[1]);$yp=trim($m[2]);$c=@simplexml_load_file("/conf/config.xml");if($c){$mbNodes=$c->xpath("//OPNsense/mihomo/general/api_bind");$mb=!empty($mbNodes)?(string)$mbNodes[0]:"127.0.0.1";$mpNodes=$c->xpath("//OPNsense/mihomo/general/api_port");$mp=!empty($mpNodes)?(string)$mpNodes[0]:"9090";if($mb==="127.0.0.1"&&$mp==="9090"&&($yb!=="127.0.0.1"||$yp!=="9090")){$doc=new DOMDocument();if($doc->load("/conf/config.xml")){$xp=new DOMXPath($doc);$gen=$xp->query("/opnsense/OPNsense/mihomo/general")->item(0);if($gen instanceof DOMElement){foreach(["api_bind"=>$yb,"api_port"=>$yp] as $k=>$v){$el=$xp->query("./".$k,$gen)->item(0);if($el instanceof DOMElement){$el->nodeValue=$v;}else{$gen->appendChild($doc->createElement($k,$v));}}$tmp="/conf/config.xml.os-mihomo-mig.tmp";if($doc->save($tmp)!==false){chmod($tmp,0640);rename($tmp,"/conf/config.xml");}}}}}}' >/dev/null 2>&1 || true
+php -r '$db=$argv[1];$dp=$argv[2];$y=@file_get_contents("/usr/local/etc/mihomo/config.yaml");if($y&&preg_match("/^external-controller:[[:space:]]*[\x22\x27]?([^:\x22\x27[:space:]]+):([0-9]+)/m",$y,$m)){$yb=trim($m[1]);$yp=trim($m[2]);$c=@simplexml_load_file("/conf/config.xml");if($c){$mbNodes=$c->xpath("//OPNsense/mihomo/general/api_bind");$mb=!empty($mbNodes)?(string)$mbNodes[0]:$db;$mpNodes=$c->xpath("//OPNsense/mihomo/general/api_port");$mp=!empty($mpNodes)?(string)$mpNodes[0]:$dp;if($mb===$db&&$mp===$dp&&($yb!==$db||$yp!==$dp)){$doc=new DOMDocument();if($doc->load("/conf/config.xml")){$xp=new DOMXPath($doc);$gen=$xp->query("/opnsense/OPNsense/mihomo/general")->item(0);if($gen instanceof DOMElement){foreach(["api_bind"=>$yb,"api_port"=>$yp] as $k=>$v){$el=$xp->query("./".$k,$gen)->item(0);if($el instanceof DOMElement){$el->nodeValue=$v;}else{$gen->appendChild($doc->createElement($k,$v));}}$tmp="/conf/config.xml.os-mihomo-mig.tmp";if($doc->save($tmp)!==false){chmod($tmp,0640);rename($tmp,"/conf/config.xml");}}}}}}' -- "$DEFAULT_API_BIND" "$DEFAULT_API_PORT" >/dev/null 2>&1 || true
 
 if [ -f /usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh ]; then
     sh /usr/local/opnsense/scripts/OPNsense/Mihomo/api_bind_manager.sh reconcile || echo "WARNING: api_bind reconcile failed before restart." >&2
@@ -83,11 +85,16 @@ echo "===> Starting mihomo (socks-core, no TUN, no DNS changes)"
 service mihomo restart >/dev/null 2>&1 || true
 
 # ---- Step 3: health gate ----
-_addr=$(awk -F: '/^external-controller:[[:space:]]*/ { sub(/^external-controller:[[:space:]]*/, ""); split($0, a, ":"); h=a[1]; p=a[2]; sub(/^[ \t"\x27]+/, "", h); sub(/[ \t"\x27]+$/, "", h); sub(/^[ \t"\x27]+/, "", p); sub(/[ \t"\x27]+.*$/, "", p); print h, p; exit }' "$CONF_DIR/config.yaml" 2>/dev/null || true)
-_target_bind=$(echo "$_addr" | cut -d' ' -f1)
-_target_port=$(echo "$_addr" | cut -d' ' -f2)
-[ -z "$_target_bind" ] && _target_bind="127.0.0.1"
-[ -z "$_target_port" ] && _target_port="9090"
+_xml_addr=$(php -r '$c=@simplexml_load_file("/conf/config.xml");if($c){$b=$c->xpath("//OPNsense/mihomo/general/api_bind");$p=$c->xpath("//OPNsense/mihomo/general/api_port");$bs=!empty($b)?trim((string)$b[0]):"";$ps=!empty($p)?trim((string)$p[0]):"";echo $bs . " " . $ps;}' 2>/dev/null || true)
+_target_bind=$(echo "$_xml_addr" | cut -d' ' -f1)
+_target_port=$(echo "$_xml_addr" | cut -d' ' -f2)
+if [ -z "$_target_port" ] || ! echo "$_target_port" | grep -Eq '^[0-9]+$'; then
+    _addr=$(awk -F: '/^external-controller:[[:space:]]*/ { sub(/^external-controller:[[:space:]]*/, ""); split($0, a, ":"); h=a[1]; p=a[2]; sub(/^[ \t"\x27]+/, "", h); sub(/[ \t"\x27]+$/, "", h); sub(/^[ \t"\x27]+/, "", p); sub(/[ \t"\x27]+.*$/, "", p); print h, p; exit }' "$CONF_DIR/config.yaml" 2>/dev/null || true)
+    [ -z "$_target_bind" ] && _target_bind=$(echo "$_addr" | cut -d' ' -f1)
+    _target_port=$(echo "$_addr" | cut -d' ' -f2)
+fi
+[ -z "$_target_bind" ] && _target_bind="$DEFAULT_API_BIND"
+[ -z "$_target_port" ] && _target_port="$DEFAULT_API_PORT"
 
 port_up() {
     _p="$1"

@@ -3,7 +3,7 @@ set -eu
 
 # service_manager.sh - Mihomo 7-State Lifecycle State Machine Manager
 # States: DISABLED, STARTING, RUNNING, DEGRADED, STOPPING, STOPPED, FAILED
-# Modes: PROXY, DIRECT
+# Modes: PROXY, TRANSPARENT, DIRECT
 
 STATE_FILE="/var/run/mihomo_state.json"
 STATE_DB_DIR="/var/db/os-mihomo"
@@ -330,12 +330,17 @@ do_start() {
         return 0
     fi
 
-    # 7. Health check passed -> RUNNING / PROXY（API DOWN 但数据面 UP 也保持运行并告警）
+    # 7. Health check passed -> RUNNING / (PROXY | TRANSPARENT)（API DOWN 但数据面 UP 也保持运行并告警）
+    _tmode="$(transport_mode_now)"
+    [ "${_tmode}" = "transparent" ] || _tmode="proxy"
+    _mode="PROXY"
+    [ "${_tmode}" = "transparent" ] && _mode="TRANSPARENT"
+
     if [ "${_api_ok}" -eq 1 ]; then
-        set_state "RUNNING" "PROXY" "${_pid}" "Service is healthy and operating in PROXY mode ($(transport_name))"
-        echo "Mihomo started successfully (PID ${_pid}, mode PROXY, transport $(transport_name))."
+        set_state "RUNNING" "${_mode}" "${_pid}" "Service is healthy and operating in ${_mode} mode ($(transport_name))"
+        echo "Mihomo started successfully (PID ${_pid}, mode ${_mode}, transport $(transport_name))."
     else
-        set_state "RUNNING" "PROXY" "${_pid}" "Data plane UP ($(transport_name)); API unresponsive, kept running per §2.6"
+        set_state "RUNNING" "${_mode}" "${_pid}" "Data plane UP ($(transport_name)); API unresponsive, kept running per §2.6"
         echo "Warning: Mihomo is running with transport $(transport_name) UP but API DOWN; service kept alive." >&2
     fi
 
@@ -486,12 +491,17 @@ do_healthcheck() {
         _api_ok=1
     fi
 
+    _tmode="$(transport_mode_now)"
+    [ "${_tmode}" = "transparent" ] || _tmode="proxy"
+    _mode="PROXY"
+    [ "${_tmode}" = "transparent" ] && _mode="TRANSPARENT"
+
     if [ "${_tun_ok}" -eq 1 ] && [ "${_api_ok}" -eq 1 ]; then
-        set_state "RUNNING" "PROXY" "${_pid}" "Healthy ($(transport_name) UP, API UP)"
+        set_state "RUNNING" "${_mode}" "${_pid}" "Healthy ($(transport_name) UP, API UP)"
         echo "Mihomo is running (PID ${_pid}, $(transport_name) UP, API UP)."
         return 0
     elif [ "${_tun_ok}" -eq 1 ] && [ "${_api_ok}" -eq 0 ]; then
-        set_state "DEGRADED" "PROXY" "${_pid}" "Degraded ($(transport_name) UP, API DOWN)"
+        set_state "DEGRADED" "${_mode}" "${_pid}" "Degraded ($(transport_name) UP, API DOWN)"
         echo "Mihomo is degraded (PID ${_pid}, $(transport_name) UP, API DOWN)."
         return 0
     elif [ "${_tun_ok}" -eq 0 ] && [ "${_api_ok}" -eq 1 ]; then

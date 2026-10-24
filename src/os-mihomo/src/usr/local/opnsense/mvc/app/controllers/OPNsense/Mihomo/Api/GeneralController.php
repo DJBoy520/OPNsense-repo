@@ -38,6 +38,9 @@ class GeneralController extends ApiMutableModelControllerBase
     protected static $internalModelClass = '\OPNsense\Mihomo\Mihomo';
     protected static $internalModelName = 'mihomo';
 
+    const DEFAULT_API_BIND = '127.0.0.1';
+    const DEFAULT_API_PORT = '9090';
+
     /**
      * 覆盖基类 getModelNodes，只暴露 general 子树，避免订阅 URL 等敏感信息被 General 子权限读取
      */
@@ -149,8 +152,8 @@ class GeneralController extends ApiMutableModelControllerBase
                     ];
                 }
 
-                // 3. bind != 127.0.0.1 时：解析 /usr/local/etc/mihomo/config.yaml 的 ^secret: 实际值
-                if ($bind !== '127.0.0.1') {
+                // 3. bind != self::DEFAULT_API_BIND 时：解析 /usr/local/etc/mihomo/config.yaml 的 ^secret: 实际值
+                if ($bind !== self::DEFAULT_API_BIND) {
                     $activeSecret = $this->getConfigSecret();
                     if ($activeSecret === '') {
                         return [
@@ -233,16 +236,16 @@ class GeneralController extends ApiMutableModelControllerBase
         $gen['secret_masked'] = $maskedSecret;
 
         // 提取并归一化展示用探测地址
-        $bind = isset($gen['api_bind']) ? (string)$gen['api_bind'] : '127.0.0.1';
-        $port = isset($gen['api_port']) ? (string)$gen['api_port'] : '9090';
+        $bind = isset($gen['api_bind']) ? (string)$gen['api_bind'] : self::DEFAULT_API_BIND;
+        $port = isset($gen['api_port']) ? (string)$gen['api_port'] : self::DEFAULT_API_PORT;
         if ($bind === '') {
-            $bind = '127.0.0.1';
+            $bind = self::DEFAULT_API_BIND;
         }
         if ($port === '') {
-            $port = '9090';
+            $port = self::DEFAULT_API_PORT;
         }
 
-        $probeBind = ($bind === '0.0.0.0') ? '127.0.0.1' : $bind;
+        $probeBind = ($bind === '0.0.0.0') ? self::DEFAULT_API_BIND : $bind;
         $gen['probe_bind'] = $probeBind;
         $gen['probe_port'] = $port;
         $gen['probe_addr'] = $probeBind . ':' . $port;
@@ -268,10 +271,10 @@ class GeneralController extends ApiMutableModelControllerBase
             'enabled' => (string)$model->general->enabled,
         ];
         if ($old['api_bind'] === '') {
-            $old['api_bind'] = '127.0.0.1';
+            $old['api_bind'] = self::DEFAULT_API_BIND;
         }
         if ($old['api_port'] === '') {
-            $old['api_port'] = '9090';
+            $old['api_port'] = self::DEFAULT_API_PORT;
         }
 
         try {
@@ -300,10 +303,10 @@ class GeneralController extends ApiMutableModelControllerBase
             'enabled' => (string)$model->general->enabled,
         ];
         if ($new['api_bind'] === '') {
-            $new['api_bind'] = '127.0.0.1';
+            $new['api_bind'] = self::DEFAULT_API_BIND;
         }
         if ($new['api_port'] === '') {
-            $new['api_port'] = '9090';
+            $new['api_port'] = self::DEFAULT_API_PORT;
         }
 
         $messages = [];
@@ -382,7 +385,7 @@ class GeneralController extends ApiMutableModelControllerBase
      * 写 /var/db/os-mihomo/panel-state.env（同目录 tmp + rename，0600）
      * 扩展记录 MIHOMO_API_BIND 与 MIHOMO_API_PORT，值已过白名单与格式校验。
      */
-    private function writePanelState($lanExpose, $lanUser, $apiBind = '127.0.0.1', $apiPort = '9090')
+    private function writePanelState($lanExpose, $lanUser, $apiBind = self::DEFAULT_API_BIND, $apiPort = self::DEFAULT_API_PORT)
     {
         $stateFile = '/var/db/os-mihomo/panel-state.env';
         $stateDir = dirname($stateFile);
@@ -452,7 +455,7 @@ class GeneralController extends ApiMutableModelControllerBase
     }
 
     /**
-     * 返回面板登录用的完整密钥（9090 external-controller）
+     * 返回面板登录用的完整密钥（external-controller）
      * 仅 page-services-mihomo* ACL 可达；与订阅 URL 不同，密钥必须能被
      * 管理员查看/复制，否则无法登录内置面板。
      * M7: 仅接受 POST 请求，受 CSRF 保护

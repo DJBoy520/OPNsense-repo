@@ -7,9 +7,9 @@
 
 <div class="mihomo-page">
     <!-- 卡片 1：自定义规则编辑器 -->
-    <div class="content-box" style="padding-bottom: 1.5em; margin-bottom: 20px;">
+    <div class="mihomo-card">
         <div class="col-xs-12">
-            <h2 class="mihomo-card-title">{{ lang._('自定义规则') }}</h2>
+            <h2 class="mihomo-card-title"><span><i class="fa fa-filter"></i> {{ lang._('自定义规则') }}</span></h2>
             <p class="text-muted">{{ lang._('持久化自定义规则将插入到生成规则列表的顶部。自定义规则在订阅更新后依然保留。') }}</p>
             <hr/>
         </div>
@@ -24,11 +24,19 @@
                 </span>
             </p>
             <div class="form-group">
-                <label>{{ lang._('允许的目标策略') }}</label>
-                <div id="rules_targets">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <label style="margin-bottom: 0;">{{ lang._('允许的目标策略') }}</label>
+                    <div>
+                        <span id="rules_targets_source" class="label label-default">{{ lang._('离线（配置文件）') }}</span>
+                        <a href="/ui/mihomo/proxies" class="btn btn-default btn-xs" style="margin-left: 6px;">
+                            <i class="fa fa-sitemap"></i> {{ lang._('打开策略组') }}
+                        </a>
+                    </div>
+                </div>
+                <div id="rules_targets" class="mihomo-chips mihomo-chips-scroll" style="margin-top: 8px;">
                     <span class="text-muted"><i class="fa fa-spinner fa-spin"></i> {{ lang._('加载中...') }}</span>
                 </div>
-                <span class="help-block">{{ lang._('仅上述列出的目标策略可作为规则的转发目标。') }}</span>
+                <span class="help-block">{{ lang._('规则的目标必须是内置动作或代理组名称；节点由策略组内部实时选择，规则不会锁定具体节点。') }}</span>
             </div>
         </div>
 
@@ -107,11 +115,11 @@
     </div>
 
     <!-- 卡片 2：当前生效规则（只读） -->
-    <div class="content-box" style="padding-bottom: 1.5em;">
+    <div class="mihomo-card">
         <div class="col-xs-12">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h3 class="mihomo-card-title" style="margin-top: 10px;">{{ lang._('当前生效规则') }}</h3>
+                    <h3 class="mihomo-card-title" style="margin-top: 10px;"><span><i class="fa fa-list-ul"></i> {{ lang._('当前生效规则') }}</span></h3>
                     <p class="text-muted">{{ lang._('Mihomo 内核当前实际运行的分流规则。与自定义规则匹配的条目已高亮标出。') }}</p>
                 </div>
                 <div>
@@ -187,6 +195,8 @@ $(function () {
     ];
 
     var allowedTargets = ['DIRECT', 'REJECT', 'REJECT-DROP'];
+    var liveGroups = [];
+    var BUILTIN_TARGETS = ['DIRECT', 'REJECT', 'REJECT-DROP'];
     var currentMode = 'table'; // 'table' or 'raw'
     var effectiveRulesCache = [];
     var effectivePagination = {
@@ -237,24 +247,81 @@ $(function () {
         }
     }
 
+    function targetNames() {
+        var names = [];
+        var seen = {};
+        function add(name) {
+            name = String(name || '');
+            if (name === '' || seen[name]) {
+                return;
+            }
+            seen[name] = true;
+            names.push(name);
+        }
+        $.each(BUILTIN_TARGETS, function (i, name) { add(name); });
+        $.each(allowedTargets, function (i, name) { add(name); });
+        $.each(liveGroups, function (i, group) { add(group && group.name); });
+        return names;
+    }
+
+    function targetMeta(name) {
+        var found = null;
+        $.each(liveGroups, function (i, group) {
+            if (group && group.name === name) {
+                found = group;
+                return false;
+            }
+        });
+        return found;
+    }
+
+    function updateTargetsSource(isLive) {
+        var $source = $('#rules_targets_source');
+        $source.removeClass('label-default label-success');
+        if (isLive) {
+            $source.addClass('label-success').text('{{ lang._("实时（mihomo API）") }}');
+        } else {
+            $source.addClass('label-default').text('{{ lang._("离线（配置文件）") }}');
+        }
+    }
+
     function renderTargets(targets) {
         if (Array.isArray(targets) && targets.length > 0) {
             allowedTargets = targets;
         }
         var $box = $('#rules_targets');
         $box.empty();
-        if (!Array.isArray(allowedTargets) || allowedTargets.length === 0) {
+        var names = targetNames();
+        if (names.length === 0) {
             $box.append($('<span class="text-muted"></span>').text('{{ lang._("未上报可用目标策略。") }}'));
             return;
         }
-        $.each(allowedTargets, function (i, target) {
-            if (i > 0) {
-                $box.append(document.createTextNode(', '));
+        $.each(names, function (i, name) {
+            var meta = targetMeta(name);
+            var $chip = $('<span class="mihomo-chip"></span>');
+            $('<span class="mihomo-chip-name"></span>').text(String(name)).appendTo($chip);
+            if (meta) {
+                var detail = String(meta.type || '');
+                if (meta.now) {
+                    detail += (detail ? ' · ' : '') + '{{ lang._("当前") }}：' + String(meta.now);
+                }
+                if (detail) {
+                    $('<span class="mihomo-chip-meta"></span>').text(detail).appendTo($chip);
+                }
             }
-            $('<span class="label label-info"></span>')
-                .css({'display': 'inline-block', 'margin': '0 2px 2px 0', 'padding': '4px 7px'})
-                .text(String(target))
-                .appendTo($box);
+            $box.append($chip);
+        });
+    }
+
+    function loadLiveGroups() {
+        ajaxGet('/api/mihomo/proxies/getGroups', {}, function (data) {
+            if (!data || data.status !== 'ok' || !data.reachable || !Array.isArray(data.groups)) {
+                updateTargetsSource(false);
+                return;
+            }
+            liveGroups = data.groups;
+            updateTargetsSource(true);
+            renderTargets(allowedTargets);
         });
     }
 
@@ -290,22 +357,118 @@ $(function () {
         return $select;
     }
 
-    function buildTargetSelect(selectedTarget) {
-        var $select = $('<select class="form-control input-sm rule-field-target"></select>');
-        var found = false;
-        $.each(allowedTargets, function (i, tgt) {
-            var $opt = $('<option></option>').attr('value', tgt).text(tgt);
-            if (tgt === selectedTarget) {
-                $opt.prop('selected', true);
-                found = true;
-            }
-            $select.append($opt);
-        });
-        if (!found && selectedTarget) {
-            var $customOpt = $('<option></option>').attr('value', selectedTarget).text(selectedTarget).prop('selected', true);
-            $select.prepend($customOpt);
+    function setPickerLabel($label, value) {
+        $label.text(value ? String(value) : '-');
+    }
+
+    function appendPickerItem($list, name, meta, current, onPick) {
+        var $item = $('<button type="button" class="mihomo-picker-item"></button>');
+        if (name === current) {
+            $item.addClass('is-active');
         }
-        return $select;
+        $('<span class="mihomo-picker-name"></span>').text(String(name)).appendTo($item);
+        var detail = '';
+        if (meta) {
+            detail = String(meta.type || '');
+            if (meta.now) {
+                detail += (detail ? ' · ' : '') + '{{ lang._("当前") }}：' + String(meta.now);
+            }
+            if (meta.count !== undefined && meta.count !== null) {
+                detail += (detail ? ' · ' : '') + String(meta.count) + ' {{ lang._("个节点") }}';
+            }
+        }
+        if (detail) {
+            $('<span class="mihomo-picker-meta"></span>').text(detail).appendTo($item);
+        }
+        $item.on('click', function () {
+            onPick(name);
+        });
+        $list.append($item);
+    }
+
+    function openTargetPicker($hidden, $label) {
+        var current = String($hidden.val() || '');
+        var $wrap = $('<div></div>');
+        var $search = $('<input type="text" class="form-control input-sm mihomo-picker-search" placeholder="{{ lang._('搜索目标策略') }}">');
+        var $list = $('<div class="mihomo-picker-list"></div>');
+        $wrap.append($search).append($list);
+
+        var dialog = BootstrapDialog.show({
+            type: BootstrapDialog.TYPE_DEFAULT,
+            title: '{{ lang._("选择目标策略") }}',
+            message: $wrap,
+            onshown: function () {
+                $search.focus();
+            }
+        });
+
+        function pick(name) {
+            $hidden.val(name);
+            setPickerLabel($label, name);
+            $hidden.trigger('change');
+            dialog.close();
+        }
+
+        function renderList() {
+            var q = $.trim(String($search.val() || '')).toLowerCase();
+            $list.empty();
+
+            if (current && $.inArray(current, targetNames()) < 0) {
+                $('<div class="mihomo-picker-section"></div>').text('{{ lang._("当前目标（不在列表中）") }}').appendTo($list);
+                appendPickerItem($list, current, null, current, pick);
+            }
+
+            $('<div class="mihomo-picker-section"></div>').text('{{ lang._("内置动作") }}').appendTo($list);
+            $.each(BUILTIN_TARGETS, function (i, name) {
+                if (q !== '' && String(name).toLowerCase().indexOf(q) < 0) {
+                    return;
+                }
+                appendPickerItem($list, name, null, current, pick);
+            });
+
+            $('<div class="mihomo-picker-section"></div>').text('{{ lang._("代理组") }}').appendTo($list);
+            var groups = liveGroups;
+            if (!groups || groups.length === 0) {
+                groups = [];
+                $.each(allowedTargets, function (i, name) {
+                    if ($.inArray(name, BUILTIN_TARGETS) < 0) {
+                        groups.push({name: name});
+                    }
+                });
+            }
+            var shown = 0;
+            $.each(groups, function (i, group) {
+                var name = (group && group.name) ? String(group.name) : '';
+                if (name === '') {
+                    return;
+                }
+                if (q !== '' && name.toLowerCase().indexOf(q) < 0) {
+                    return;
+                }
+                appendPickerItem($list, name, group, current, pick);
+                shown++;
+            });
+            if (shown === 0) {
+                $('<div class="mihomo-empty"></div>').text('{{ lang._("没有匹配的目标策略。") }}').appendTo($list);
+            }
+        }
+
+        $search.on('input', renderList);
+        renderList();
+    }
+
+    function buildTargetPicker(selectedTarget) {
+        var $wrap = $('<div class="mihomo-target-cell"></div>');
+        var $hidden = $('<input type="hidden" class="rule-field-target" />').val(selectedTarget || '');
+        var $btn = $('<button type="button" class="btn btn-default btn-xs rule-target-picker"></button>');
+        var $label = $('<span class="rule-target-label"></span>');
+        setPickerLabel($label, selectedTarget || '');
+        $btn.append($label).append(' ').append($('<span class="caret"></span>'));
+        $btn.on('click', function () {
+            openTargetPicker($hidden, $label);
+        });
+        $wrap.append($hidden).append($btn);
+        return $wrap;
     }
 
     function createTableRow(type, payload, target, noResolve, lineNumber, commentText) {
@@ -343,9 +506,9 @@ $(function () {
             $tr.append($tdPayload);
 
             var $tdTarget = $('<td style="vertical-align: middle;"></td>');
-            var $selTarget = buildTargetSelect(target);
-            $selTarget.on('change', updateCounter);
-            $tdTarget.append($selTarget);
+            var $targetCell = buildTargetPicker(target);
+            $targetCell.find('.rule-field-target').on('change', updateCounter);
+            $tdTarget.append($targetCell);
             $tr.append($tdTarget);
 
             var $tdOptions = $('<td style="vertical-align: middle;"></td>');
@@ -547,6 +710,7 @@ $(function () {
                 renderRuleTypes(data.ruleTypes);
             }
             renderTargets(data.targets);
+            loadLiveGroups();
 
             var initialContent = (typeof data.content === 'string') ? data.content : '';
             $('#rules_content').val(initialContent);

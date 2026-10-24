@@ -207,4 +207,31 @@ assert parse_rule_line('BADLINE') is None
 PROBE_EOF
 pass "behavioral logic probes passed"
 
+# 12. 目标策略实时选择器契约
+echo "--> Testing rules.volt: live target picker..."
+grep -q 'rule-target-picker' "$VIEW_FILE" || fail "rules.volt missing .rule-target-picker"
+grep -q 'rule-field-target' "$VIEW_FILE" || fail "rules.volt missing .rule-field-target hidden input"
+grep -q 'buildTargetPicker' "$VIEW_FILE" || fail "rules.volt missing buildTargetPicker"
+grep -q 'openTargetPicker' "$VIEW_FILE" || fail "rules.volt missing openTargetPicker"
+grep -q "trigger('change')" "$VIEW_FILE" || fail "rules.volt picker must trigger change"
+grep -q 'updateCounter' "$VIEW_FILE" || fail "rules.volt picker must keep updateCounter"
+grep -q 'rules_targets_source' "$VIEW_FILE" || fail "rules.volt missing live/offline source badge"
+grep -q 'getGroups' "$VIEW_FILE" || fail "rules.volt missing getGroups live source"
+grep -q 'loadLiveGroups' "$VIEW_FILE" || fail "rules.volt missing loadLiveGroups"
+grep -q 'mihomo-chip' "$VIEW_FILE" || fail "rules.volt missing target chips"
+grep -q 'parseTextToTable' "$VIEW_FILE" || fail "rules.volt missing parseTextToTable"
+grep -q "\.find('.rule-field-target').val()" "$VIEW_FILE" || fail "serializeTableToText must still read .rule-field-target"
+if grep -q 'buildTargetSelect' "$VIEW_FILE"; then
+    fail "rules.volt still contains legacy buildTargetSelect"
+fi
+python3 -c "
+import re, sys
+with open('$VIEW_FILE', 'r', encoding='utf-8') as f:
+    text = f.read()
+if re.search(r'[\U00010000-\U0010ffff]', text):
+    print('FAIL: rules.volt contains emojis')
+    sys.exit(1)
+"
+pass "live target picker contract and zero emoji verified"
+
 echo "===> ALL RULES PAGE ASSERTION & PROBE TESTS PASSED!"

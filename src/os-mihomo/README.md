@@ -22,7 +22,7 @@ Mihomo（原 Clash Meta）是一款高性能、功能丰富的开源代理核心
 
 ## 架构（socks 核心模式）
 
-- **mihomo 仅作 socks 核心**：socks5 `127.0.0.1:7891`、DNS `127.0.0.1:1053`、RESTful API `127.0.0.1:9090`。所有监听均绑定本地回环。
+- **mihomo 仅作 socks 核心**：socks5 `127.0.0.1:7891`、DNS `127.0.0.1:1053`、RESTful API 默认 `127.0.0.1:9090`（可在面板配置绑定地址与端口）。所有监听默认均绑定本地回环。
 - **传输层外置（1.0.5 起可选接管）**：透明代理由 hev-socks5-tunnel（`tun0`）+ PF `route-to` 承担；面板将传输模式切到 transparent 时，插件仅通过自有 `mihomo-transport` anchor（head+quick）下发 route-to 规则并接管 hev 进程，关回 proxy 模式即干净移除；任何情况下不触碰 PF 主规则集与 Unbound。
 - **TUN 在 FreeBSD 不可用**：mihomo 的 sing-tun 后端没有 FreeBSD 实现，开启 TUN 后实测报 `configure tun interface: invalid argument`（见 [MetaCubeX/mihomo issue #1157](https://github.com/MetaCubeX/mihomo/issues/1157)）。因此 `config.yaml` 固定 `tun.enable: false`，**请勿开启**。
 - **Fail-Open**：watchdog 以进程、API(9090)、DNS(1053)、socks(7891) 监听为健康判据；异常时停掉 mihomo 并切回直连，DNS 由上游 fallback 自然回退，主路由不会因代理故障断网。
@@ -54,7 +54,7 @@ https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-freebsd-am
 - **Geo 数据手动更新**：默认 `geo-auto-update: false`，需要时经 Clash API 或手动替换 Geo 文件更新，避免后台自动下载。
 - **Secret 不进 argv**：CSPRNG 生成 32 字节 API Secret，订阅注入与轮换通过环境变量（`ENVIRON`）和 0600 临时 sed 脚本完成，不出现在进程参数中；WebGUI 展示自动脱敏。
 - **订阅原子更新**：订阅 URL 仅允许 `https://`，日志掩码到 host 级；合成配置先由 `mihomo -t` 校验，通过后才备份并原子替换 `config.yaml`，坏订阅永远不会覆盖生产配置。
-- **API 本地保护**：Clash API 强制绑定 `127.0.0.1:9090`，面板经 SSH 隧道访问，勿暴露到外网。
+- **API 安全与可配**：Clash API 默认绑定 `127.0.0.1:9090`，绑定地址与端口可在面板配置（非回环绑定强制有效 Secret），面板经 SSH 隧道或 WebGUI 访问，勿将 API 端口暴露到外网。
 - **Fail-Open 故障旁路**：watchdog 巡检进程/API/DNS/socks 监听，异常时切回直连。
 - **零系统侵入**：Unbound 永不触碰；`/conf/config.xml` 仅允许模型 API 写入 `//OPNsense/mihomo` 与 `//OPNsense/cron` 两个节点；PF 只允许自有 `mihomo-transport` anchor（只含 pass/route-to，禁止 block/reject），主规则集永不篡改。
 
@@ -77,7 +77,7 @@ sh /usr/local/etc/mihomo/setup.sh 'https://your-subscription-url' transparent
 1. 当前仅支持 x86_64 / amd64 平台。
 2. mihomo 的 TUN 仍必须保持关闭（FreeBSD 无 sing-tun 实现）；透明代理传输在 transparent 模式下由插件托管的 hev-socks5-tunnel（`tun0`，需 `if_tun` 内核模块）+ `mihomo-transport` anchor 承担，proxy 模式下完全不涉及。
 3. 安装调试完成后，将日志层级调整为 `error`，避免长期运行产生过多日志。
-4. Clash API 仅监听 `127.0.0.1:9090`，面板通过 SSH 隧道访问，**请勿将 9090 端口暴露至外网**。
+4. Clash API 默认监听 `127.0.0.1:9090`（可在面板配置），面板通过 WebGUI 或 SSH 隧道访问，**请勿将 API 端口暴露至外网**。
 5. 必须保持 `tun.enable: false`：FreeBSD 无 sing-tun 实现，开启会导致启动失败（issue #1157）。
 6. 插件不修改 Unbound。DNS 查询需要由上游（Unbound 或 AdGuardHome 等）转发到 `127.0.0.1:1053`，由运维按既有 DNS 架构配置。
 
@@ -99,14 +99,16 @@ Services（服务） > Mihomo
 面板已随包内置（zashboard）。在管理终端建立隧道：
 
 ```sh
-ssh -L 9090:127.0.0.1:9090 root@<OPNsense_LAN_IP>
+ssh -L <API_PORT>:127.0.0.1:<API_PORT> root@<OPNsense_LAN_IP>
 ```
 
 保持 SSH 会话，然后在浏览器打开：
 
 ```text
-http://127.0.0.1:9090/ui
+http://127.0.0.1:<API_PORT>/ui
 ```
+
+> 注：`<API_PORT>` 默认为 `9090`，若在面板中调整了端口，请使用对应端口。
 
 登录所需 Secret 可在插件界面查看（也可执行 `configctl mihomo secret-get`）。
 
@@ -182,7 +184,7 @@ tail -f /var/log/mihomo_watchdog.log
 
 检查监听端口：
 ```sh
-sockstat -4 -l | egrep ':1053|:7891|:9090'
+sockstat -4 -l | egrep ':1053|:7891|:<API_PORT>'
 ```
 
 检查 socks 监听：
@@ -195,9 +197,9 @@ sockstat -4 -l -p 7891
 dig @127.0.0.1 -p 1053 example.com
 ```
 
-检查 API（需替换 Secret）：
+检查 API（需替换 Secret 与端口，默认 9090）：
 ```sh
-curl -s -H "Authorization: Bearer <secret>" http://127.0.0.1:9090/version
+curl -s -H "Authorization: Bearer <secret>" http://127.0.0.1:<API_PORT>/version
 ```
 
 检查传输层（既有体系，不属本插件管理）：
@@ -212,7 +214,7 @@ pfctl -sr | grep route-to
 |---|---|
 | 代理无法连接 | `service mihomo status`；`tail -f /var/log/mihomo.log`；`sockstat -4 -l -p 7891` |
 | DNS 解析异常 | `dig @127.0.0.1 -p 1053 example.com`；确认上游（Unbound/AGH）已转发到 `127.0.0.1:1053`；插件不修改 Unbound |
-| API / 面板无法访问 | API 仅监听 `127.0.0.1:9090`，使用 SSH 隧道访问 `http://127.0.0.1:9090/ui`，勿从外网直连 |
+| API / 面板无法访问 | API 默认监听 `127.0.0.1:9090`（可在面板配置），使用 WebGUI 或 SSH 隧道访问 `http://127.0.0.1:<API_PORT>/ui`，勿从外网直连 |
 | 订阅更新失败 | 检查目标 URL 是否为 `https://` 且证书有效；`tail -f /var/log/mihomo_sub.log`；校验失败时生产配置保持不变 |
 | socks 监听缺失 | `sockstat -4 -l -p 7891`；`service mihomo restart`；查看 `/var/log/mihomo.log` |
 | 透明代理不通 | 检查 hev-socks5-tunnel 的 `tun0` 与 PF `route-to` 规则（既有传输层）；本插件不创建 TUN、不下发 PF 规则 |

@@ -7,122 +7,154 @@
 
 <div class="mihomo-page">
     <!-- 卡片 1：服务控制 -->
-    <div class="content-box">
-        <div class="col-xs-12">
+    <div class="mihomo-card">
+        <div class="mihomo-card-head">
             <h2 class="mihomo-card-title">
                 <span><i class="fa fa-cogs"></i> {{ lang._('服务控制') }}</span>
             </h2>
-            <p class="mihomo-subtitle">{{ lang._('控制 Mihomo 守护进程的运行状态，并查看实时服务状态。') }}</p>
-            <hr/>
-        </div>
-
-        <!-- 服务控制按钮工具栏 -->
-        <div class="col-xs-12 mihomo-toolbar" style="margin-bottom: 15px;">
-            <div class="btn-group">
-                <button class="btn btn-success" id="btn_start" type="button">
-                    <i class="fa fa-play"></i> {{ lang._('启动') }}
-                </button>
-                <button class="btn btn-danger" id="btn_stop" type="button">
-                    <i class="fa fa-stop"></i> {{ lang._('停止') }}
-                </button>
-                <button class="btn btn-warning" id="btn_restart" type="button">
-                    <i class="fa fa-refresh"></i> {{ lang._('重启') }}
-                </button>
-                <button class="btn btn-info" id="btn_reload" type="button">
-                    <i class="fa fa-retweet"></i> {{ lang._('重载') }}
-                </button>
-            </div>
-            <span id="service_status_badge" class="label label-default" style="margin-left: 10px; font-size: 13px; padding: 6px 10px;">
+            <span id="service_status_badge" class="label label-default" style="font-size: 13px; padding: 5px 10px;">
                 <i class="fa fa-circle-o-notch fa-spin"></i> {{ lang._('检查中...') }}
             </span>
         </div>
-        <div class="clearfix"></div>
+        <div class="mihomo-card-body">
+            <!-- 服务控制按钮工具栏 -->
+            <div class="mihomo-toolbar" style="margin-bottom: 0;">
+                <div class="btn-group">
+                    <button class="btn btn-success" id="btn_start" type="button">
+                        <i class="fa fa-play"></i> {{ lang._('启动') }}
+                    </button>
+                    <button class="btn btn-danger" id="btn_stop" type="button">
+                        <i class="fa fa-stop"></i> {{ lang._('停止') }}
+                    </button>
+                    <button class="btn btn-warning" id="btn_restart" type="button">
+                        <i class="fa fa-refresh"></i> {{ lang._('重启') }}
+                    </button>
+                    <button class="btn btn-info" id="btn_reload" type="button">
+                        <i class="fa fa-retweet"></i> {{ lang._('重载') }}
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 卡片 2：运行参数 -->
-    <div class="content-box">
-        <div class="col-xs-12">
+    <div class="mihomo-card">
+        <div class="mihomo-card-head">
             <h2 class="mihomo-card-title">
                 <span><i class="fa fa-sliders"></i> {{ lang._('运行参数') }}</span>
             </h2>
-            <p class="mihomo-subtitle">{{ lang._('配置 Mihomo 透明代理、网络监听以及核心服务运行参数。') }}</p>
-            <hr/>
         </div>
-
-        <div class="col-xs-12">
-            {{ partial("layout_partials/base_form", ['fields': generalForm, 'id': 'frm_general_settings']) }}
-            <hr />
-            <button class="btn btn-primary" id="btn_save" type="button">
-                <b>{{ lang._('保存并应用') }}</b> <i id="btn_save_progress"></i>
-            </button>
+        <div class="mihomo-card-body">
+            <div class="mihomo-form-wrap">
+                {{ partial("layout_partials/base_form", ['fields': generalForm, 'id': 'frm_general_settings']) }}
+                <div class="mihomo-toolbar" style="margin-top: 15px; margin-bottom: 0;">
+                    <button class="btn btn-primary" id="btn_save" type="button">
+                        <b>{{ lang._('保存并应用') }}</b> <i id="btn_save_progress"></i>
+                    </button>
+                </div>
+            </div>
         </div>
-        <div class="clearfix"></div>
     </div>
 
     <!-- 卡片 3：面板与 API -->
-    <div class="content-box">
-        <div class="col-xs-12">
+    <div class="mihomo-card">
+        <div class="mihomo-card-head">
             <h2 class="mihomo-card-title">
-                <span><i class="fa fa-tachometer"></i> {{ lang._('面板与 API') }} <span id="api_header_port" class="text-muted" style="font-size: 16px;"></span></span>
+                <span><i class="fa fa-tachometer"></i> {{ lang._('面板与 API') }} <span id="api_header_port" class="badge" style="margin-left: 8px; font-weight: normal; background-color: #f0f0f0; color: #555555;"></span></span>
             </h2>
-            <p class="mihomo-subtitle" id="api_panel_desc">{{ lang._('外部控制 API 访问凭据、监听参数以及控制面板连接指南。') }}</p>
-            <hr/>
         </div>
-
-        <div class="col-xs-12">
-            <div class="form-group">
-                <label>{{ lang._('当前密钥（掩码）') }}</label>
-                <div>
-                    <code id="api_secret_masked" class="mihomo-mono" style="font-size: 13px;">{{ lang._('加载中...') }}</code>
+        <div class="mihomo-card-body">
+            <div class="mihomo-section">
+                <div class="mihomo-section-title">
+                    <i class="fa fa-link"></i> {{ lang._('访问地址与密钥') }}
                 </div>
-                <span class="help-block" id="api_secret_help">{{ lang._('用于登录 Web 控制台及外部控制器 API。修改后将同步写入 config.yaml、订阅模板与 sub 环境变量，并热重载生效。') }}</span>
+                <table class="table mihomo-kv">
+                    <tbody>
+                        <tr>
+                            <th>{{ lang._('内置面板') }}</th>
+                            <td>
+                                <a id="api_bundled_link" href="#" target="_blank" rel="noopener noreferrer">-</a>
+                                <button type="button" class="btn btn-xs btn-default mihomo-copy-btn" id="btn_copy_api_endpoint" style="margin-left: 8px;">
+                                    <i class="fa fa-clipboard"></i> {{ lang._('复制端点') }}
+                                </button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('API 端点') }}</th>
+                            <td>
+                                <code id="api_endpoint_display" class="mihomo-mono">-</code>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('当前监听') }}</th>
+                            <td>
+                                <span id="api_bind_badge" class="label label-default mihomo-mono">-</span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('认证密钥') }}</th>
+                            <td>
+                                <code id="api_secret_masked" class="mihomo-mono" style="font-size: 13px;">{{ lang._('加载中...') }}</code>
+                                <div style="margin-top: 6px;">
+                                    <button class="btn btn-xs btn-default" id="btn_secret_reveal" type="button">
+                                        <i class="fa fa-eye"></i> {{ lang._('查看密钥') }}
+                                    </button>
+                                    <button class="btn btn-xs btn-warning" id="btn_secret_generate" type="button" style="margin-left: 6px;">
+                                        <i class="fa fa-refresh"></i> {{ lang._('生成新密钥') }}
+                                    </button>
+                                </div>
+                                <div class="text-muted" id="api_secret_help" style="font-size: 12px; margin-top: 6px;">
+                                    {{ lang._('用于登录 Web 控制台及外部控制器 API。修改后将同步写入配置并热重载生效。') }}
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div id="api_wan_warn" class="alert alert-warning" style="display: none; margin-top: 10px; margin-bottom: 0; padding: 8px 12px; font-size: 12px;">
+                    <i class="fa fa-exclamation-triangle"></i> {{ lang._('已监听全部网络接口（0.0.0.0）。建议仅在 LAN 接口监听并确保 WAN 防火墙阻断未授权流量。') }}
+                </div>
             </div>
-            <div class="alert alert-info" id="api_dashboard_guide" style="margin-bottom: 15px;">
-                <strong><i class="fa fa-info-circle"></i> {{ lang._('面板与客户端访问指南') }}：</strong>
-                <div id="api_guide_content" style="margin-top: 5px;">
-                    <span>{{ lang._('内置面板') }}：<a id="api_bundled_link" href="#" target="_blank" rel="noopener noreferrer">http://<span class="api_disp_host">127.0.0.1</span>:<span class="api_disp_port">9090</span>/ui/</a></span><br/>
-                    <span>{{ lang._('Metacubexd / 外部客户端') }}：{{ lang._('主机') }}：<code>http://<span class="api_disp_host">127.0.0.1</span>:<span class="api_disp_port">9090</span></code>，{{ lang._('密钥') }}：{{ lang._('点击 [查看密钥] 复制') }}</span>
-                    <div id="api_wan_warn" class="text-warning" style="display: none; margin-top: 4px;">
-                        <i class="fa fa-exclamation-triangle"></i> {{ lang._('0.0.0.0 会在全部网络接口（IPv4+IPv6）上监听。请确保外部 WAN 防火墙规则阻断未授权流量；强烈建议绑定至 LAN 接口 IP。') }}
+
+            <!-- 自定义密钥（折叠） -->
+            <div class="mihomo-section" style="margin-top: 15px;">
+                <a href="#collapse_secret_custom" data-toggle="collapse" class="text-muted" style="text-decoration: none; font-size: 13px;">
+                    <i class="fa fa-caret-right"></i> <b>{{ lang._('自定义密钥设置') }}</b>
+                </a>
+                <div id="collapse_secret_custom" class="collapse" style="margin-top: 10px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="api_secret_custom">{{ lang._('设置自定义密钥') }}</label>
+                        <div class="input-group" style="max-width: 480px;">
+                            <input type="text" class="form-control" id="api_secret_custom" autocomplete="off" spellcheck="false"/>
+                            <span class="input-group-btn">
+                                <button class="btn btn-primary" id="btn_secret_apply" type="button">
+                                    <b>{{ lang._('应用') }}</b> <i id="btn_secret_apply_progress"></i>
+                                </button>
+                            </span>
+                        </div>
+                        <span class="help-block" style="font-size: 12px; margin-bottom: 0;">{{ lang._('4-128 个字符；仅允许字母、数字以及 . _ ~ @ # % ^ + = : ; , ! ? * -') }}</span>
                     </div>
                 </div>
             </div>
-            <button class="btn btn-default" id="btn_secret_reveal" type="button">
-                <i class="fa fa-eye"></i> {{ lang._('查看密钥') }}
-            </button>
-            <button class="btn btn-warning" id="btn_secret_generate" type="button" style="margin-left: 8px;">
-                <i class="fa fa-refresh"></i> {{ lang._('生成新密钥') }}
-            </button>
-        </div>
 
-        <div class="col-xs-12" style="margin-top: 15px;">
-            <div class="form-group">
-                <label for="api_secret_custom">{{ lang._('设置自定义密钥') }}</label>
-                <div class="input-group" style="max-width: 480px;">
-                    <input type="text" class="form-control" id="api_secret_custom" autocomplete="off" spellcheck="false"/>
-                    <span class="input-group-btn">
-                        <button class="btn btn-primary" id="btn_secret_apply" type="button">
-                            <b>{{ lang._('应用') }}</b> <i id="btn_secret_apply_progress"></i>
-                        </button>
-                    </span>
+            <!-- 客户端访问指南 -->
+            <div class="mihomo-guide" id="api_dashboard_guide">
+                <strong><i class="fa fa-info-circle"></i> {{ lang._('客户端接入指南') }}</strong>
+                <div id="api_guide_content" style="margin-top: 6px;">
+                    <p>{{ lang._('内置面板') }}：<a href="#" class="api_link_preview" target="_blank" rel="noopener noreferrer">http://<span class="api_disp_host">-</span>:<span class="api_disp_port">-</span>/ui/</a></p>
+                    <p>{{ lang._('Metacubexd / 外部客户端') }}：{{ lang._('服务器') }} <code>http://<span class="api_disp_host">-</span>:<span class="api_disp_port">-</span></code>，{{ lang._('密钥') }}：{{ lang._('点击 [查看密钥] 复制') }}</p>
                 </div>
-                <span class="help-block">{{ lang._('4-128 个字符；仅允许字母、数字以及 . _ ~ @ # % ^ + = : ; , ! ? * -') }}</span>
             </div>
         </div>
-        <div class="clearfix"></div>
     </div>
 
     <!-- 卡片 4：订阅与策略 -->
-    <div class="content-box">
-        <div class="col-xs-12">
+    <div class="mihomo-card">
+        <div class="mihomo-card-head">
             <h2 class="mihomo-card-title">
                 <span><i class="fa fa-rss"></i> {{ lang._('订阅与策略') }}</span>
             </h2>
-            <p class="mihomo-subtitle">{{ lang._('管理远程订阅源、策略组模式、自动更新并在下方查看同步结果。') }}</p>
-            <hr/>
         </div>
-
-        <div class="col-xs-12">
+        <div class="mihomo-card-body">
             <div class="form-group">
                 <label for="sub_url">{{ lang._('订阅地址') }}</label>
                 <input type="text" class="form-control" id="sub_url" placeholder="https://..." autocomplete="off" spellcheck="false"/>
@@ -135,70 +167,77 @@
                 </div>
                 <span class="help-block">{{ lang._('存储的 URL 在此已脱敏展示；完整地址绝不输出至浏览器。') }}</span>
             </div>
-            <div class="checkbox">
-                <label>
-                    <input type="checkbox" id="sub_auto_update"/> {{ lang._('启用自动更新') }}
-                </label>
-            </div>
-            <div class="form-group">
-                <label for="sub_interval">{{ lang._('更新周期') }}</label>
-                <select id="sub_interval" class="form-control" style="max-width: 260px;">
-                    <option value="o6h">{{ lang._('每 6 小时') }}</option>
-                    <option value="o12h">{{ lang._('每 12 小时') }}</option>
-                    <option value="o24h">{{ lang._('每 24 小时') }}</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="sub_strategy">{{ lang._('策略来源') }}</label>
-                <select id="sub_strategy" class="form-control" style="max-width: 380px;">
-                    <option value="subscription">{{ lang._('沿用订阅自带策略组与规则（推荐）') }}</option>
-                    <option value="template">{{ lang._('插件内置策略组与规则') }}</option>
-                </select>
-                <span class="help-block">{{ lang._('沿用订阅时，代理组与分流规则与 Windows/Clash 客户端一致；订阅缺少 proxy-groups 或 rules 时自动回退插件模板。切换后建议点「立即更新」。') }}</span>
-            </div>
-            <button class="btn btn-primary" id="btn_sub_save" type="button">
-                <b>{{ lang._('保存订阅') }}</b> <i id="btn_sub_save_progress"></i>
-            </button>
-            <button class="btn btn-info" id="btn_sub_update" type="button" style="margin-left: 8px;">
-                <i class="fa fa-cloud-download" id="btn_sub_update_icon"></i> {{ lang._('立即更新') }}
-            </button>
-        </div>
 
-        <div class="col-xs-12" id="sub_state" style="margin-top: 20px;">
-            <table class="table table-condensed table-bordered" style="margin-bottom: 0;">
-                <tbody>
-                    <tr>
-                        <th style="width: 220px;">{{ lang._('最近更新时间') }}</th>
-                        <td id="sub_state_time">-</td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('最近更新结果') }}</th>
-                        <td><span id="sub_state_result" class="label label-default">-</span></td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('节点数量') }}</th>
-                        <td id="sub_state_nodes">-</td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('策略来源') }}</th>
-                        <td id="sub_state_strategy">-</td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('策略组数量') }}</th>
-                        <td id="sub_state_groups">-</td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('分流规则数量') }}</th>
-                        <td id="sub_state_rules">-</td>
-                    </tr>
-                    <tr>
-                        <th>{{ lang._('结果消息') }}</th>
-                        <td id="sub_state_message">-</td>
-                    </tr>
-                </tbody>
-            </table>
+            <div class="row">
+                <div class="col-xs-12 col-sm-6">
+                    <div class="checkbox" style="margin-top: 5px;">
+                        <label>
+                            <input type="checkbox" id="sub_auto_update"/> {{ lang._('启用自动更新') }}
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="sub_interval">{{ lang._('更新周期') }}</label>
+                        <select id="sub_interval" class="form-control" style="max-width: 260px;">
+                            <option value="o6h">{{ lang._('每 6 小时') }}</option>
+                            <option value="o12h">{{ lang._('每 12 小时') }}</option>
+                            <option value="o24h">{{ lang._('每 24 小时') }}</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-xs-12 col-sm-6">
+                    <div class="form-group">
+                        <label for="sub_strategy">{{ lang._('策略来源') }}</label>
+                        <select id="sub_strategy" class="form-control" style="max-width: 380px;">
+                            <option value="subscription">{{ lang._('沿用订阅自带策略组与规则（推荐）') }}</option>
+                            <option value="template">{{ lang._('插件内置策略组与规则') }}</option>
+                        </select>
+                        <span class="help-block">{{ lang._('沿用订阅时，代理组与分流规则与客户端一致；缺失时自动回退插件模板。') }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mihomo-toolbar" style="margin-top: 10px; margin-bottom: 20px;">
+                <button class="btn btn-primary" id="btn_sub_save" type="button">
+                    <b>{{ lang._('保存订阅') }}</b> <i id="btn_sub_save_progress"></i>
+                </button>
+                <button class="btn btn-info" id="btn_sub_update" type="button">
+                    <i class="fa fa-cloud-download" id="btn_sub_update_icon"></i> {{ lang._('立即更新') }}
+                </button>
+            </div>
+
+            <!-- 最近更新结果（紧凑 2 列 kv） -->
+            <div id="sub_state">
+                <div class="mihomo-section-title">
+                    <i class="fa fa-history"></i> {{ lang._('最近更新状态') }}
+                </div>
+                <table class="table mihomo-kv">
+                    <tbody>
+                        <tr>
+                            <th>{{ lang._('更新时间') }}</th>
+                            <td id="sub_state_time">-</td>
+                            <th>{{ lang._('更新结果') }}</th>
+                            <td><span id="sub_state_result" class="label label-default">-</span></td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('节点数量') }}</th>
+                            <td id="sub_state_nodes">-</td>
+                            <th>{{ lang._('策略来源') }}</th>
+                            <td id="sub_state_strategy">-</td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('策略组数量') }}</th>
+                            <td id="sub_state_groups">-</td>
+                            <th>{{ lang._('分流规则数量') }}</th>
+                            <td id="sub_state_rules">-</td>
+                        </tr>
+                        <tr>
+                            <th>{{ lang._('结果消息') }}</th>
+                            <td colspan="3" id="sub_state_message">-</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <div class="clearfix"></div>
     </div>
 </div>
 
@@ -228,26 +267,101 @@ $(function () {
     function updateStatus() {
         ajaxGet('/api/mihomo/service/status', {}, function (data) {
             var $badge = $('#service_status_badge');
-            if (data.status === 'running') {
-                $badge.removeClass('label-default label-danger').addClass('label-success').html('<i class="fa fa-check-circle"></i> ' + '{{ lang._("运行中") }}');
+            if (data && data.status === 'running') {
+                $badge.removeClass('label-default label-danger').addClass('label-success').empty()
+                    .append($('<i class="fa fa-check-circle"></i>'))
+                    .append(' ' + '{{ lang._("运行中") }}');
             } else {
-                $badge.removeClass('label-default label-success').addClass('label-danger').html('<i class="fa fa-times-circle"></i> ' + '{{ lang._("已停止") }}');
+                $badge.removeClass('label-default label-success').addClass('label-danger').empty()
+                    .append($('<i class="fa fa-times-circle"></i>'))
+                    .append(' ' + '{{ lang._("已停止") }}');
             }
         });
     }
 
-    var currentApiBind = '127.0.0.1';
-    var currentApiPort = '9090';
+    var currentApiBind = '';
+    var currentApiPort = '';
+
+    function copyToClipboard(text, successMsg) {
+        if (!text || text === '-') {
+            return;
+        }
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(function () {
+                BootstrapDialog.show({
+                    type: BootstrapDialog.TYPE_INFO,
+                    title: '{{ lang._("复制成功") }}',
+                    message: textBlock(successMsg || '{{ lang._("内容已复制到剪贴板。") }}')
+                });
+            }, function () {
+                fallbackCopy(text, successMsg);
+            });
+        } else {
+            fallbackCopy(text, successMsg);
+        }
+    }
+
+    function fallbackCopy(text, successMsg) {
+        var $temp = $('<textarea style="position: absolute; left: -9999px; top: -9999px;"></textarea>');
+        $temp.val(text).appendTo('body');
+        $temp.select();
+        try {
+            document.execCommand('copy');
+            BootstrapDialog.show({
+                type: BootstrapDialog.TYPE_INFO,
+                title: '{{ lang._("复制成功") }}',
+                message: textBlock(successMsg || '{{ lang._("内容已复制到剪贴板。") }}')
+            });
+        } catch (e) {
+            BootstrapDialog.show({
+                type: BootstrapDialog.TYPE_WARNING,
+                title: '{{ lang._("复制失败") }}',
+                message: textBlock('{{ lang._("请手动复制：") }}' + text)
+            });
+        }
+        $temp.remove();
+    }
 
     function updateApiDisplay(bind, port) {
-        currentApiBind = bind || '127.0.0.1';
-        currentApiPort = port || '9090';
-        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : currentApiBind;
-        var fullAddr = dispHost + ':' + currentApiPort;
-        $('#api_header_port').text('(' + currentApiPort + ')');
+        currentApiBind = (bind && String(bind).trim().length > 0) ? String(bind).trim() : '';
+        currentApiPort = (port && String(port).trim().length > 0) ? String(port).trim() : '';
+
+        if (!currentApiPort) {
+            $('#api_header_port').text('');
+            $('.api_disp_port').text('-');
+            $('.api_disp_host').text('-');
+            $('#api_endpoint_display').text('-');
+            $('#api_bind_badge').text('-');
+            $('#api_bundled_link').attr('href', '#').text('-').css('pointer-events', 'none').css('text-decoration', 'none');
+            $('.api_link_preview').attr('href', '#').css('pointer-events', 'none').css('text-decoration', 'none');
+            $('#btn_copy_api_endpoint').prop('disabled', true);
+            $('#api_wan_warn').hide();
+            return;
+        }
+
+        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : (currentApiBind || window.location.hostname);
+        var endpointUrl = 'http://' + dispHost + ':' + currentApiPort;
+        var bundledUrl = endpointUrl + '/ui/';
+
+        $('#api_header_port').text('{{ lang._("端口") }} ' + currentApiPort);
         $('.api_disp_host').text(dispHost);
         $('.api_disp_port').text(currentApiPort);
-        $('#api_bundled_link').attr('href', 'http://' + fullAddr + '/ui/').text('http://' + fullAddr + '/ui/');
+        $('#api_endpoint_display').text(endpointUrl);
+        $('#api_bind_badge').text((currentApiBind || '-') + ':' + currentApiPort);
+
+        $('#api_bundled_link')
+            .attr('href', bundledUrl)
+            .text(bundledUrl)
+            .css('pointer-events', 'auto')
+            .css('text-decoration', 'underline');
+
+        $('.api_link_preview')
+            .attr('href', bundledUrl)
+            .css('pointer-events', 'auto')
+            .css('text-decoration', 'underline');
+
+        $('#btn_copy_api_endpoint').prop('disabled', false);
+
         if (currentApiBind === '0.0.0.0') {
             $('#api_wan_warn').show();
         } else {
@@ -255,13 +369,20 @@ $(function () {
         }
     }
 
+    $('#btn_copy_api_endpoint').click(function () {
+        var endpoint = $('#api_endpoint_display').text();
+        if (endpoint && endpoint !== '-') {
+            copyToClipboard(endpoint, '{{ lang._("API 端点地址已复制到剪贴板。") }}');
+        }
+    });
+
     function loadSecretMasked() {
         ajaxGet('/api/mihomo/general/getGeneral', {}, function (data) {
             var gen = (data && data.mihomo && data.mihomo.general) ? data.mihomo.general : ((data && data.general) ? data.general : {});
             var masked = gen.secret_masked || '';
             $('#api_secret_masked').text(masked || '{{ lang._("未配置") }}');
-            var bind = gen.api_bind || '127.0.0.1';
-            var port = gen.api_port || '9090';
+            var bind = gen.api_bind;
+            var port = gen.api_port;
             updateApiDisplay(bind, port);
         });
     }
@@ -269,8 +390,9 @@ $(function () {
     function showSecretDialog(title, secret) {
         var $input = $('<input type="text" class="form-control" readonly style="font-family: Menlo, Monaco, Consolas, monospace;"/>').val(secret);
         var $wrap = $('<div></div>');
-        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : currentApiBind;
-        $('<p></p>').text('{{ lang._("使用此密钥登录 Web 控制台 / Metacubexd（地址 ") }}' + dispHost + ':' + currentApiPort + '）：').appendTo($wrap);
+        var dispHost = (currentApiBind === '0.0.0.0') ? window.location.hostname : (currentApiBind || '-');
+        var endpointText = currentApiPort ? (dispHost + ':' + currentApiPort) : '-';
+        $('<p></p>').text('{{ lang._("使用此密钥登录 Web 控制台 / Metacubexd（地址 ") }}' + endpointText + '）：').appendTo($wrap);
         $input.appendTo($wrap);
         BootstrapDialog.show({
             type: BootstrapDialog.TYPE_INFO,
@@ -291,7 +413,7 @@ $(function () {
 
     function callServiceAction(action) {
         ajaxCall('/api/mihomo/service/' + action, {}, function (data) {
-            if (data.status === 'ok') {
+            if (data && data.status === 'ok') {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_SUCCESS,
                     title: '{{ lang._("服务控制") }}',
@@ -301,7 +423,7 @@ $(function () {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_DANGER,
                     title: '{{ lang._("错误") }}',
-                    message: textBlock(data.message || '{{ lang._("操作失败。") }}')
+                    message: textBlock((data && data.message) ? data.message : '{{ lang._("操作失败。") }}')
                 });
             }
             setTimeout(updateStatus, 1000);
@@ -377,7 +499,7 @@ $(function () {
         subLastUpdateTime = lastUpdate.time ? String(lastUpdate.time) : null;
         $('#sub_state_time').text(lastUpdate.time ? String(lastUpdate.time) : '-');
         $('#sub_state_nodes').text((lastUpdate.nodes !== undefined && lastUpdate.nodes !== null) ? String(lastUpdate.nodes) : '-');
-        $('#sub_state_strategy').text(lastUpdate.strategy === 'subscription' ? '订阅自带' : '插件模板');
+        $('#sub_state_strategy').text(lastUpdate.strategy === 'subscription' ? '{{ lang._("订阅自带") }}' : '{{ lang._("插件模板") }}');
         $('#sub_state_groups').text((lastUpdate.groups !== undefined && lastUpdate.groups !== null && lastUpdate.groups !== '') ? String(lastUpdate.groups) : '-');
         $('#sub_state_rules').text((lastUpdate.rules !== undefined && lastUpdate.rules !== null && lastUpdate.rules !== '') ? String(lastUpdate.rules) : '-');
         $('#sub_state_message').text(lastUpdate.message ? String(lastUpdate.message) : '-');

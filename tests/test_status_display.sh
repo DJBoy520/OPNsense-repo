@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# os-mihomo v1.0.9 特性 a：状态页传输层显示语义测试
+# os-mihomo 状态页传输层与内核运行时模式显示语义测试
 # 从仓库根运行：sh tests/test_status_display.sh
 
 echo "===> Running status display semantic tests..."
@@ -11,6 +11,8 @@ ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 STATUS_PY="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/OPNsense/Mihomo/system_status.py"
 STATUS_VOLT="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/views/OPNsense/Mihomo/status.volt"
+STATUS_CTRL="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/mvc/app/controllers/OPNsense/Mihomo/Api/StatusController.php"
+SVC_MGR="$ROOT_DIR/src/os-mihomo/src/usr/local/opnsense/scripts/OPNsense/Mihomo/service_manager.sh"
 
 TMP_DIR="$(mktemp -d /tmp/test-status-display.XXXXXX)"
 cleanup() {
@@ -29,6 +31,8 @@ pass() {
 
 [ -f "$STATUS_PY" ] || fail "missing system_status.py"
 [ -f "$STATUS_VOLT" ] || fail "missing status.volt"
+[ -f "$STATUS_CTRL" ] || fail "missing StatusController.php"
+[ -f "$SVC_MGR" ] || fail "missing service_manager.sh"
 
 # ---------------------------------------------------------------------------
 echo "--> Test 1: Python 编译测试（拷贝至 /tmp 编译，严禁在 src 树内跑 python）..."
@@ -55,15 +59,15 @@ pass "system_status.py contains TRANSPORT_MODE_FILE, HEV_TUN_DEVICE, UP+RUNNING 
 
 # ---------------------------------------------------------------------------
 echo "--> Test 3: status.volt 静态断言..."
-# MODE 徽章：透明代理 与 代理 分支
+# MODE 徽章：接入：透明代理 与 接入：仅代理 分支
 grep -q 'data\.transport_mode === .transparent.' "$STATUS_VOLT" || \
     fail "status.volt missing data.transport_mode === 'transparent' branch"
-grep -q '模式：透明代理' "$STATUS_VOLT" || \
-    fail "status.volt missing '模式：透明代理' badge"
-grep -q '模式：代理' "$STATUS_VOLT" || \
-    fail "status.volt missing '模式：代理' badge"
-grep -q '模式：直连' "$STATUS_VOLT" || \
-    fail "status.volt missing '模式：直连' badge"
+grep -q '接入：透明代理' "$STATUS_VOLT" || \
+    fail "status.volt missing '接入：透明代理' badge"
+grep -q '接入：仅代理' "$STATUS_VOLT" || \
+    fail "status.volt missing '接入：仅代理' badge"
+grep -q '接入：直连' "$STATUS_VOLT" || \
+    fail "status.volt missing '接入：直连' badge"
 
 # TUN 徽章：UP/DOWN/SOCKS 三态且 SOCKS 不带 label-danger
 grep -q "data\.tun_status === 'UP'" "$STATUS_VOLT" || \
@@ -81,20 +85,70 @@ awk '
     in_socks && /label-danger/ { print "FAIL: SOCKS branch has label-danger"; exit 1 }
 ' "$STATUS_VOLT" || fail "status.volt SOCKS branch must not contain label-danger"
 
-pass "status.volt contains TRANSPARENT/PROXY/DIRECT and neutral SOCKS branch without label-danger"
+# 副标题必须已删除
+if grep -q "核心生命周期" "$STATUS_VOLT"; then
+    fail "status.volt must not contain '核心生命周期' subtitle (R1)"
+fi
+
+# 新增元素与 ID 断言
+grep -q 'id="core_mode_select"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_select"
+grep -q 'id="btn_core_mode_apply"' "$STATUS_VOLT" || fail "status.volt missing #btn_core_mode_apply"
+grep -q 'id="core_mode_msg"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_msg"
+grep -q 'id="core_mode_config"' "$STATUS_VOLT" || fail "status.volt missing #core_mode_config"
+grep -q '配置默认' "$STATUS_VOLT" || fail "status.volt missing '配置默认' label"
+grep -q '内核模式' "$STATUS_VOLT" || fail "status.volt missing '内核模式' label"
+
+# 轮询逻辑断言（4000ms 且包含 getMode 与 getMihomoStatus）
+grep -q '4000' "$STATUS_VOLT" || fail "status.volt missing 4000ms polling interval"
+grep -q 'getMode' "$STATUS_VOLT" || fail "status.volt missing getMode call"
+grep -q 'setMode' "$STATUS_VOLT" || fail "status.volt missing setMode call"
+
+pass "status.volt contains correct badges, runtime controls, no subtitle, and proper polling"
 
 # ---------------------------------------------------------------------------
-echo "--> Test 4: 零硬编码守卫（两源文件均无 :9090）..."
-if grep -q ":9090" "$STATUS_PY"; then
-    fail "system_status.py contains literal :9090"
+echo "--> Test 4: StatusController.php 静态契约断言..."
+grep -q 'function getModeAction' "$STATUS_CTRL" || fail "StatusController.php missing getModeAction"
+grep -q 'function setModeAction' "$STATUS_CTRL" || fail "StatusController.php missing setModeAction"
+grep -q 'PATCH' "$STATUS_CTRL" || fail "StatusController.php must use PATCH for setMode"
+grep -q '204' "$STATUS_CTRL" || fail "StatusController.php must treat HTTP 204 as success"
+grep -q -- '-K' "$STATUS_CTRL" || fail "StatusController.php must use curl -K for secret"
+grep -q 'tempnam' "$STATUS_CTRL" || fail "StatusController.php must use tempnam"
+grep -q '0600' "$STATUS_CTRL" || fail "StatusController.php must chmod 0600 for curl config"
+grep -q 'finally' "$STATUS_CTRL" || fail "StatusController.php must use finally to clean up secret file"
+
+# 流式读取断言
+grep -q 'fopen' "$STATUS_CTRL" || fail "StatusController.php must use fopen"
+grep -q 'fgets' "$STATUS_CTRL" || fail "StatusController.php must use fgets"
+if grep -E '([^a-zA-Z0-9_]file|^file)\(|file_get_contents\(' "$STATUS_CTRL"; then
+    fail "StatusController.php must not use file() or file_get_contents()"
 fi
-if grep -q ":9090" "$STATUS_VOLT"; then
-    fail "status.volt contains literal :9090"
+if grep -q "'1\.0\.9'" "$STATUS_CTRL"; then
+    fail "StatusController.php must not hardcode '1.0.9'"
 fi
-pass "system_status.py and status.volt have zero :9090 literals"
+grep -q 'UNKNOWN' "$STATUS_CTRL" || fail "StatusController.php RUNNING default mode must be UNKNOWN"
+
+pass "StatusController.php satisfies streaming, secret safety, PATCH, and 200/204 contract"
 
 # ---------------------------------------------------------------------------
-echo "--> Test 5: PATH mock ifconfig 与三态行为断言..."
+echo "--> Test 5: service_manager.sh 状态模式写入断言..."
+if grep -E 'set_state "(RUNNING|DEGRADED)" "PROXY"' "$SVC_MGR"; then
+    fail "service_manager.sh must not hardcode PROXY in set_state RUNNING/DEGRADED"
+fi
+grep -q 'TRANSPARENT' "$SVC_MGR" || fail "service_manager.sh missing TRANSPARENT branch"
+grep -q '# Modes: PROXY, TRANSPARENT, DIRECT' "$SVC_MGR" || fail "service_manager.sh Modes comment not updated"
+pass "service_manager.sh correctly uses transport_mode_now for RUNNING/DEGRADED and supports TRANSPARENT"
+
+# ---------------------------------------------------------------------------
+echo "--> Test 6: 零硬编码守卫（相关文件均无 :9090）..."
+for f in "$STATUS_PY" "$STATUS_VOLT" "$STATUS_CTRL"; do
+    if grep -q ":9090" "$f"; then
+        fail "$f contains literal :9090"
+    fi
+done
+pass "Status display related files have zero :9090 literals"
+
+# ---------------------------------------------------------------------------
+echo "--> Test 7: PATH mock ifconfig 与三态行为断言..."
 MOCK_BIN="$TMP_DIR/mock_bin"
 mkdir -p "$MOCK_BIN"
 
@@ -250,7 +304,7 @@ assert d["transport_mode"] == "proxy", d
 pass "Scene 3: non-transparent / missing / garbage -> tun_status=SOCKS, tun_kind=none, transport_mode=proxy"
 
 # ---------------------------------------------------------------------------
-echo "--> Test 6: 契约检验（单行 JSON、异常输出 {}、退出码 0）..."
+echo "--> Test 8: 契约检验（单行 JSON、异常输出 {}、退出码 0）..."
 OUT_EXEC="$(python3 -c '
 import subprocess, sys
 res = subprocess.run([sys.executable, sys.argv[1]], stdout=subprocess.PIPE, check=True)
