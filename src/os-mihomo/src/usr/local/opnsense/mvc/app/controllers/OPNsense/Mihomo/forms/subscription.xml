@@ -1,20 +1,20 @@
 <form>
     <field>
         <id>mihomo.subscription.url</id>
-        <label>Subscription URL</label>
+        <label>订阅地址</label>
         <type>text</type>
-        <help>HTTPS subscription URL. Leave empty to keep the currently stored URL; the panel only displays a masked form (scheme://host/***).</help>
+        <help>HTTPS 订阅链接。留空表示保持当前已存储的地址；面板仅展示脱敏后的地址（scheme://host/***）。</help>
     </field>
     <field>
         <id>mihomo.subscription.auto_update</id>
-        <label>Automatic Update</label>
+        <label>启用自动更新</label>
         <type>checkbox</type>
-        <help>Register a cron job that renews the subscription and recomposes the configuration automatically.</help>
+        <help>注册计划任务（cron job），定期自动更新订阅并重新合成配置文件。</help>
     </field>
     <field>
         <id>mihomo.subscription.auto_interval</id>
-        <label>Update Interval</label>
+        <label>更新周期</label>
         <type>dropdown</type>
-        <help>How often the automatic subscription update runs (6, 12 or 24 hours).</help>
+        <help>自动更新订阅任务的执行频率（每 6、12 或 24 小时）。</help>
     </field>
 </form>

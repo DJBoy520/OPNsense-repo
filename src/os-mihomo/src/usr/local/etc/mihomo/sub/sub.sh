@@ -29,6 +29,7 @@ TEMPLATE_FILE="${MIHOMO_TEMPLATE_FILE:-$Server_Dir/template_config.yaml}"
 TMP_RAW=""
 TMP_PROXIES=""
 TMP_NAMES=""
+TMP_STRATEGY=""
 TMP_FINAL=""
 mkdir -p "$Conf_Dir" "$Temp_Dir"
 
@@ -49,6 +50,7 @@ cleanup_tmp_files() {
     [ -n "$TMP_RAW" ] && rm -f "$TMP_RAW"
     [ -n "$TMP_PROXIES" ] && rm -f "$TMP_PROXIES"
     [ -n "$TMP_NAMES" ] && rm -f "$TMP_NAMES"
+    [ -n "$TMP_STRATEGY" ] && rm -f "$TMP_STRATEGY"
     [ -n "$TMP_FINAL" ] && rm -f "$TMP_FINAL"
     rm -f "$Conf_Dir/config.clean.yaml" "$Conf_Dir/config.new.yaml"
     mihomo_lib_lock_release
@@ -190,6 +192,27 @@ if [ "${NODE_COUNT:-0}" -le 0 ] 2>/dev/null; then
     exit 1
 fi
 
+# 策略片段处理
+STRATEGY_MODE="$(mihomo_lib_strategy_mode)"
+STRATEGY_FALLBACK_MSG=""
+TMP_STRATEGY=""
+if [ "$STRATEGY_MODE" = "subscription" ]; then
+    TMP_STRATEGY="$(mktemp "$Temp_Dir/strategy.XXXXXX")" || {
+        echo "创建临时文件失败：TMP_STRATEGY"
+        mihomo_lib_status_write "failed" "$NODE_COUNT" "" "创建策略临时文件失败"
+        exit 1
+    }
+    if mihomo_lib_extract_strategy "$TMP_RAW" "$TMP_STRATEGY"; then
+        export MIHOMO_STRATEGY_INPUT_FILE="$TMP_STRATEGY"
+    else
+        rm -f "$TMP_STRATEGY"
+        TMP_STRATEGY=""
+        export MIHOMO_STRATEGY_MODE="template"
+        STRATEGY_FALLBACK_MSG="订阅缺少 proxy-groups 或 rules，已回退插件模板"
+        echo "提示：$STRATEGY_FALLBACK_MSG" >&2
+    fi
+fi
+
 # 合成配置
 echo "合成配置..."
 sleep 1
@@ -199,9 +222,13 @@ if ! mihomo_lib_compose "$TMP_PROXIES" "$TMP_FINAL"; then
     exit 1
 fi
 
+COMPOSE_USED="${MIHOMO_COMPOSE_STRATEGY_USED:-template}"
+COMPOSE_GROUPS="${MIHOMO_COMPOSE_STRATEGY_GROUPS:-0}"
+COMPOSE_RULES="${MIHOMO_COMPOSE_STRATEGY_RULES:-0}"
+
 if [ ! -s "$TMP_FINAL" ]; then
     echo "合成后的配置文件为空。"
-    mihomo_lib_status_write "failed" "$NODE_COUNT" "" "合成后的配置文件为空"
+    mihomo_lib_status_write "failed" "$NODE_COUNT" "" "合成后的配置文件为空" "$COMPOSE_USED" "$COMPOSE_GROUPS" "$COMPOSE_RULES"
     exit 1
 fi
 
@@ -217,19 +244,43 @@ echo "应用配置..."
 if [ -x "$ATOMIC_UPDATER" ]; then
     if ! "$ATOMIC_UPDATER" "$TMP_FINAL" reload; then
         echo "原子更新配置失败！生产配置保持不变。"
-        mihomo_lib_status_write "failed" "$NODE_COUNT" "" "原子更新配置校验或替换失败"
+        mihomo_lib_status_write "failed" "$NODE_COUNT" "" "原子更新配置校验或替换失败" "$COMPOSE_USED" "$COMPOSE_GROUPS" "$COMPOSE_RULES"
         exit 1
     fi
 else
     echo "错误：未找到原子更新脚本 $ATOMIC_UPDATER"
-    mihomo_lib_status_write "failed" "$NODE_COUNT" "" "未找到原子更新脚本"
+    mihomo_lib_status_write "failed" "$NODE_COUNT" "" "未找到原子更新脚本" "$COMPOSE_USED" "$COMPOSE_GROUPS" "$COMPOSE_RULES"
     exit 1
 fi
 echo ""
 
 # D3 缓存一致性：原子更新成功后，持久化缓存并记录哈希
 CACHE_HASH=$(mihomo_lib_cache_store "$TMP_PROXIES" 2>/dev/null || true)
-mihomo_lib_status_write "success" "$NODE_COUNT" "$CACHE_HASH" "订阅更新成功"
+
+STRATEGY_STORE_WARN=""
+if [ "$COMPOSE_USED" = "subscription" ] && [ -n "$TMP_STRATEGY" ]; then
+    if ! mihomo_lib_strategy_store "$TMP_STRATEGY"; then
+        STRATEGY_STORE_WARN="（策略缓存写入失败）"
+    fi
+elif [ "$COMPOSE_USED" = "template" ] && [ "$STRATEGY_MODE" = "subscription" ]; then
+    mihomo_lib_strategy_remove
+fi
+
+if [ "$COMPOSE_USED" = "subscription" ]; then
+    MSG="订阅更新成功（策略：订阅自带，${COMPOSE_GROUPS} 个策略组 / ${COMPOSE_RULES} 条规则）"
+else
+    MSG="订阅更新成功（策略：插件模板）"
+fi
+
+if [ -n "$STRATEGY_FALLBACK_MSG" ]; then
+    MSG="${MSG}；${STRATEGY_FALLBACK_MSG}"
+fi
+if [ -n "$STRATEGY_STORE_WARN" ]; then
+    MSG="${MSG}${STRATEGY_STORE_WARN}"
+fi
+
+mihomo_lib_status_write "success" "$NODE_COUNT" "$CACHE_HASH" "$MSG" "$COMPOSE_USED" "$COMPOSE_GROUPS" "$COMPOSE_RULES"
+echo "$MSG"
 
 #################### 输出仪表盘信息 ####################
 sleep 1

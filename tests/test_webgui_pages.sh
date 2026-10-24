@@ -158,6 +158,38 @@ if grep -q "lan_api" "$MODEL_XML"; then
 fi
 echo "  [PASS] Mihomo.xml has api_bind/api_port and no lan_api"
 
+# ②-b 契约 3.4：Mihomo.xml strategy 字段及选项
+grep -q '<strategy type="OptionField">' "$MODEL_XML" || {
+    echo "FAIL: Mihomo.xml missing strategy OptionField"; exit 1;
+}
+grep -q '<subscription>订阅自带策略组与规则</subscription>' "$MODEL_XML" || {
+    echo "FAIL: Mihomo.xml missing subscription strategy option label"; exit 1;
+}
+grep -q '<template>插件内置模板</template>' "$MODEL_XML" || {
+    echo "FAIL: Mihomo.xml missing template strategy option label"; exit 1;
+}
+echo "  [PASS] Mihomo.xml contains strategy OptionField with subscription and template options"
+
+# ②-c 契约 3.4：SubscriptionController.php 常量与 strategy 逻辑
+SUB_CTRL="$CTRL_DIR/Api/SubscriptionController.php"
+[ -f "$SUB_CTRL" ] || { echo "FAIL: missing SubscriptionController.php"; exit 1; }
+grep -q "const STRATEGY_MODE_FILE" "$SUB_CTRL" || {
+    echo "FAIL: SubscriptionController.php missing STRATEGY_MODE_FILE constant"; exit 1;
+}
+grep -q "writeStrategyMode" "$SUB_CTRL" || {
+    echo "FAIL: SubscriptionController.php missing writeStrategyMode method"; exit 1;
+}
+# setAction 中对 strategy 的白名单校验（含 subscription、template 字面量）
+awk '
+    /function setAction/ { in_act = 1 }
+    in_act && /subscription/ && /template/ { has_whitelist = 1 }
+    in_act && /^    \}/ {
+        if (!has_whitelist) { exit 1 }
+        exit 0
+    }
+' "$SUB_CTRL" || { echo "FAIL: SubscriptionController setAction must whitelist validate strategy against subscription and template"; exit 1; }
+echo "  [PASS] SubscriptionController.php has STRATEGY_MODE_FILE, writeStrategyMode and strategy whitelist validation"
+
 # ③ GeneralController 含 secret 有效值前置检查与 api-bind-apply 调用
 grep -q "getConfigSecret" "$GEN_CTRL" || {
     echo "FAIL: GeneralController must check config.yaml secret value before binding non-loopback"; exit 1;

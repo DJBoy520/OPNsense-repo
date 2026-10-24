@@ -73,6 +73,21 @@ echo "--> Testing RulesController.php: secure curl -K header passing in getEffec
 echo "$ACTION_BODY" | grep -q "\-K " || fail "getEffectiveRulesAction must use -K to pass header securely"
 pass "curl command uses -K config file to protect secret from argv leakage"
 
+# 5b. 契约第 9 节断言：getEffectiveRulesAction 使用 /version 探测与流式分页解析
+echo "--> Testing RulesController.php: /version safe probe and streaming pagination contract..."
+echo "$ACTION_BODY" | grep -q "/version" || fail "getEffectiveRulesAction must use /version for reachable probe"
+if echo "$ACTION_BODY" | grep -q "/rules"; then
+    fail "getEffectiveRulesAction must not request /rules API anymore"
+fi
+grep -q "fopen" "$CTRL_FILE" || fail "RulesController.php missing fopen for streaming config"
+grep -q "fgets" "$CTRL_FILE" || fail "RulesController.php missing fgets for streaming config"
+echo "$ACTION_BODY" | grep -q "limit" || fail "getEffectiveRulesAction missing limit parameter"
+echo "$ACTION_BODY" | grep -q "offset" || fail "getEffectiveRulesAction missing offset parameter"
+echo "$ACTION_BODY" | grep -q "total" || fail "getEffectiveRulesAction missing total return field"
+echo "$ACTION_BODY" | grep -q "truncated" || fail "getEffectiveRulesAction missing truncated return field"
+grep -q "query" "$CTRL_FILE" || fail "RulesController.php missing query parameter/field"
+pass "RulesController.php /version probe and stream pagination contract satisfied"
+
 # 6. 断言 RulesController.php 包含 secret 解析且按 ' #' 剥离注释
 echo "--> Testing RulesController.php: config.yaml secret parsing..."
 grep -q "readConfigSecret" "$CTRL_FILE" || fail "RulesController.php missing readConfigSecret method"
@@ -100,12 +115,17 @@ grep -q "btn_mode_table" "$VIEW_FILE" || fail "rules.volt missing btn_mode_table
 grep -q "switchMode" "$VIEW_FILE" || fail "rules.volt missing switchMode function"
 pass "raw source mode toggle present"
 
-# 10. 断言 rules.volt 包含生效规则区
-echo "--> Testing rules.volt: effective rules view..."
+# 10. 断言 rules.volt 包含生效规则区与分页控件
+echo "--> Testing rules.volt: effective rules view and pagination controls..."
 grep -q "getEffectiveRules" "$VIEW_FILE" || fail "rules.volt missing getEffectiveRules AJAX call"
 grep -q "tbl_effective_rules" "$VIEW_FILE" || fail "rules.volt missing tbl_effective_rules"
 grep -q "filter_effective_rules" "$VIEW_FILE" || fail "rules.volt missing filter_effective_rules search input"
-pass "effective rules section present"
+grep -q "effective_prev" "$VIEW_FILE" || fail "rules.volt missing effective_prev pagination button"
+grep -q "effective_next" "$VIEW_FILE" || fail "rules.volt missing effective_next pagination button"
+grep -q "effective_page_info" "$VIEW_FILE" || fail "rules.volt missing effective_page_info span"
+grep -q "effective_count_label" "$VIEW_FILE" || fail "rules.volt missing effective_count_label"
+grep -q "350" "$VIEW_FILE" || fail "rules.volt missing 350ms search debounce"
+pass "effective rules section and pagination controls present"
 
 # 11. 断言 rules.volt 序列化修复：payload !== '' 及 data-line 重排
 echo "--> Testing rules.volt: serialization logic..."
@@ -163,6 +183,26 @@ assert strip_yaml_comment('pass#123') == 'pass#123'
 secret = 'test"secret\\123'
 escaped = secret.replace('\\', '\\\\').replace('"', '\\"')
 assert escaped == 'test\\"secret\\\\123'
+
+# 验证 4：流式解析规则逻辑（MATCH 规则与普通规则分段）
+def parse_rule_line(raw):
+    raw = raw.strip()
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1]
+    parts = [p.strip() for p in raw.split(',')]
+    if len(parts) < 2:
+        return None
+    rtype = parts[0]
+    if rtype.upper() == 'MATCH':
+        return {'type': rtype, 'payload': '', 'proxy': parts[1]}
+    if len(parts) < 3:
+        return None
+    return {'type': rtype, 'payload': parts[1], 'proxy': parts[2]}
+
+assert parse_rule_line('MATCH,DIRECT') == {'type': 'MATCH', 'payload': '', 'proxy': 'DIRECT'}
+assert parse_rule_line('DOMAIN-SUFFIX,example.com,DIRECT') == {'type': 'DOMAIN-SUFFIX', 'payload': 'example.com', 'proxy': 'DIRECT'}
+assert parse_rule_line('IP-CIDR,1.1.1.1/32,PROXY,no-resolve') == {'type': 'IP-CIDR', 'payload': '1.1.1.1/32', 'proxy': 'PROXY'}
+assert parse_rule_line('BADLINE') is None
 
 PROBE_EOF
 pass "behavioral logic probes passed"

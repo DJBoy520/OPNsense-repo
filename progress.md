@@ -98,3 +98,29 @@
 **最终包 `output/os-mihomo-1.0.9.pkg` SHA256=0f84f54a08882246e874d6802e07fbb77aceb6c89776db32f6bc01ec7019e710**（378 文件；1.0.8 旧包移 output/archive/）。VM 现态：0.0.0.0:9090 + transparent 全链，服务 RUNNING。
 
 **工具链备忘（AMR 本会话未加载，先记档）**：①WebGUI curl 脚本化登录时 CSRF 隐藏域字段名可能含连字符（如 `wUXLKAP2uZI1FlAmEG6-Jg`），提取正则必须 `[A-Za-z0-9-]\{16,\}`——旧字母数字模式取到空名、POST 缺 token 得 403，易误判为 45s 登录限流。②MetacubeXD 等外置面板的后端地址必须填 `http://<ip>:9090`（不带 `/ui/` 尾缀）——`/ui/` 是 mihomo 内嵌静态页路由，拼进后端地址会 404 报"后端无法连接"。
+
+---
+
+## 2026-10-22 · v1.1.0：订阅自带分流 + 四页中文化/亮色重排 + 35.7 万规则分页
+
+**用户报障**：同一订阅在 Windows Clash 客户端里是「🔯 代理模式 / 黑名单(GFWlist) / 白名单(Whitelist) / 全球拦截 / 地区分组」，插件里却只剩「🌍选择节点 / 自动选择 / 负载均衡 / AI / Apple / 漏网之鱼」；日志页纯黑与 OPNsense 亮色界面格格不入；界面英文；整体排版不美观。
+
+**根因**：`sub.sh` 只提取 `proxies:`，随后用 `template_config.yaml` 的固定策略组与规则重写整份配置，订阅自带的 `proxy-groups:` / `rules:` 被整体丢弃；日志页硬编码 `#1e1e1e` 等深色；所有文案走 `lang._()` 但没有中文语言包；页面是临时内联样式堆叠。
+
+**v1.1.0 特性**：
+1. **策略来源**（`mihomo.subscription.strategy`，默认 `subscription`）：订阅模式下提取 `proxies + proxy-groups + rule-providers + sub-rules + rules`（以及 `proxy-providers`，如有），只替换模板的策略层，端口/DNS/sniffer/secret/geodata/tun=false 等基础设施仍由模板负责；自定义规则与 `GEOSITE,private,DIRECT` 注入到 `rules:` 顶部。订阅缺 groups/rules 时回退模板并写状态。策略片段持久化到 `/var/db/os-mihomo/subscription-strategy.yaml`（0600），模式状态在 `/var/db/os-mihomo/strategy-mode`。
+2. **策略切换 API**：`SubscriptionController` 保存 `strategy` 后原子写模式文件；策略变化且缓存存在时同步 `mihomo rules-recompose`，返回 `recompose` 与中文 message；无缓存时明确提示点「立即更新」，不再误报“已合成”。
+3. **规则页大规则集分页**：`config.yaml` 实测 17,180,901 字节 / 357,229 条生效规则（含自定义 1 条 + private 1 条）；`getEffectiveRules` 改为 `/version` 安全探测 + `fopen/fgets` 流式读取 `rules:` 块，支持 `limit`（默认 200，1~1000）/`offset`/`q`（服务端搜索），返回 `total/truncated/query`；前端增加上一页/下一页/页码/窗口统计与 350ms 防抖，永不一次性渲染 35 万行。
+4. **UI 重构**：新增共享 `styles.volt`（OPNsense 亮色卡片、橙色强调、sticky 表头、响应式）；General 四卡片（服务控制/运行参数/面板 API/订阅与策略）；Status 8 个 KPI 卡片；Rules 两卡片 + 分页表；Logs 去掉纯黑改亮色表格（级别徽章中文，下载保留原始级别）。
+5. **全中文**：四页文案、三个 form、Menu、ACL、模型 OptionValues（调试/信息/警告/错误/静默、仅代理模式/透明代理模式、每 6/12/24 小时）与验证消息全部中文化；技术标识（DIRECT/REJECT/GEOSITE/RULE-SET/no-resolve/SOCKS/TUN/API）保留。
+
+**流程**：主工作流 4 个 Gemini 文件包并行（订阅合成 core / PHP 模型控制器 / General+样式+表单 / Status+Rules+Logs）+ 7/7 测试门禁 + 双复核 0 条；主控审计另修：`styles.volt` 被写成带行号的损坏文件、策略组计数把组内节点列表也算进去（14→虚高）、模型下拉选项英文、`truncated` 恒 false、**`sub.sh` 把 `MIHOMO_STRATEGY_FILE` 覆盖成临时输入导致缓存写回临时文件并被 cleanup 删除**（改为 `MIHOMO_STRATEGY_INPUT_FILE` 与缓存路径分离）、日志下载级别中文化后丢失原始级别、状态页传输层仍显英文。追加包 E 完成分页/流式解析。全量 **19/19 测试 PASS**；`scripts/build.sh` + `verify-package.sh` PASS（379 文件，SHA256 `cdc08a90d40dd8cc8bd44d09f98d3c05dae75b7406de4d882c47fed24af3f0e2`，32,736,581 bytes）。
+
+**VM 实测（192.168.30.159，真实机场订阅）**：`pkg add -f` 健康门禁通过；`sub-update` 下载 17,177,955 字节 / 45 节点，合成 17,180,901 字节，`mihomo -t` 通过；`config.yaml` 出现 14 个机场组（🔯 代理模式、🚀 绕过大陆丨黑名单(GFWlist)、🌈 白名单(Whitelist)、PROXY、🛑 全球拦截、地区组等），`🌍选择节点` 计数 0；状态 JSON `strategy=subscription,groups=14,rules=357227`；策略缓存 17,164,344 字节；规则页 API `total=357229`、首页 5 条（首条为自定义 `IP-CIDR,1.0.0.1/32,DIRECT,no-resolve`）、`q=google` 793 条、末页 offset 357225 返回 4 条；策略切换 template↔subscription 实测：mode 文件 `template`/`subscription`，config 23,125 ↔ 17,180,901 字节、5 ↔ 14 组，均返回 `OK: config recomposed from cache`；四页 200；`/version` 200；服务 RUNNING、transport_mode=transparent、TUN UP(hev-tun)、API UP、内存 345.5MB；自定义规则与 `GEOSITE,private,DIRECT` 在 rules 顶部（第 319/320 行）。WebGUI 静态页面确认无旧英文标题、日志页无 `#1e1e1e` 等深色、分页控件/策略卡/中文菜单齐全。
+
+**已知限制（未在本版修）**：
+- `/var/db/os-mihomo/strategy-mode` 是模型投影；仅恢复 `config.xml`（不改 /var/db）时可能与模型漂移，恢复后重新保存一次订阅设置即可。
+- `pkg add -f` 升级会把 transport-mode 状态重置为 proxy（v1.0.9 既有问题）；模型为 transparent 时升级后需执行一次 `configctl filter reload && configctl mihomo transport-enable`，或在面板把传输模式往返切换一次。
+- zashboard 自带的 `/rules` 页仍会拉取全量规则，35 万条时较慢；插件自己的分流规则页已分页。
+- 订阅必须为块状 YAML 且带内联 `proxies:`；`proxy-providers` 型订阅和 YAML 锚点未支持，会由 `mihomo -t` 拦下并保持旧配置。
+- 状态卡「分流规则数量」统计订阅自身规则（357227），规则页「总计」含注入的自定义/private 规则（357229）。

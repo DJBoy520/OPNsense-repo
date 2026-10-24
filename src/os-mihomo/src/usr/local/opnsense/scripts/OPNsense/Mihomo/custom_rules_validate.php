@@ -18,6 +18,7 @@
  */
 
 const DEFAULT_TEMPLATE_FILE = '/usr/local/etc/mihomo/sub/template_config.yaml';
+const DEFAULT_CONFIG_FILE = '/usr/local/etc/mihomo/config.yaml';
 const MAX_RULES_BYTES = 32768;
 const MAX_RULE_LINES = 200;
 
@@ -83,27 +84,23 @@ function yaml_scalar(string $raw): string
     return $value;
 }
 
-// 从订阅模板的顶层 proxy-groups 块收集组名（到下一个顶层键为止）
+// 从指定 YAML 文件的顶层 proxy-groups 块收集组名（到下一个顶层键为止，流式读取）
 function parse_proxy_group_names(string $file): array
 {
     if (!is_file($file) || !is_readable($file)) {
-        fwrite(STDERR, "错误：无法读取订阅模板：{$file}\n");
-        exit(1);
+        fwrite(STDERR, "错误：无法读取目标配置文件：{$file}\n");
+        return [];
     }
-    $content = file_get_contents($file);
-    if ($content === false) {
-        fwrite(STDERR, "错误：无法读取订阅模板：{$file}\n");
-        exit(1);
-    }
-
-    $lines = preg_split('/\r\n|\r|\n/', $content);
-    if ($lines === false) {
+    $handle = @fopen($file, 'r');
+    if ($handle === false) {
+        fwrite(STDERR, "错误：无法读取目标配置文件：{$file}\n");
         return [];
     }
 
     $inGroups = false;
     $names = [];
-    foreach ($lines as $line) {
+    while (($line = fgets($handle)) !== false) {
+        $line = rtrim($line, "\r\n");
         if (!$inGroups) {
             if (preg_match('/^proxy-groups[ \t]*:/', $line) === 1) {
                 $inGroups = true;
@@ -121,6 +118,7 @@ function parse_proxy_group_names(string $file): array
             }
         }
     }
+    fclose($handle);
 
     return $names;
 }
@@ -128,7 +126,26 @@ function parse_proxy_group_names(string $file): array
 function resolve_targets(): array
 {
     $targets = BUILTIN_TARGETS;
-    foreach (parse_proxy_group_names(template_file()) as $name) {
+    $names = [];
+
+    $envTargets = getenv('MIHOMO_TARGETS_FILE');
+    if (is_string($envTargets) && $envTargets !== '' && is_file($envTargets) && is_readable($envTargets)) {
+        $names = parse_proxy_group_names($envTargets);
+        if (count($names) === 0) {
+            fwrite(STDERR, "提示：指定的目标文件未解析出代理组，回退模板\n");
+            $names = parse_proxy_group_names(template_file());
+        }
+    } elseif (is_file(DEFAULT_CONFIG_FILE) && is_readable(DEFAULT_CONFIG_FILE)) {
+        $names = parse_proxy_group_names(DEFAULT_CONFIG_FILE);
+        if (count($names) === 0) {
+            fwrite(STDERR, "提示：生效配置未解析出代理组，回退模板\n");
+            $names = parse_proxy_group_names(template_file());
+        }
+    } else {
+        $names = parse_proxy_group_names(template_file());
+    }
+
+    foreach ($names as $name) {
         if (!in_array($name, $targets, true)) {
             $targets[] = $name;
         }

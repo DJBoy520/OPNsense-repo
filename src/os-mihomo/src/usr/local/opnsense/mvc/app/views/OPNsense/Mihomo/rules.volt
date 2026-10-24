@@ -3,153 +3,167 @@
  # All rights reserved.
  #}
 
-<div class="content-box" style="padding-bottom: 1.5em;">
-    <div class="col-xs-12">
-        <h2>{{ lang._('Mihomo - Custom Rules') }}</h2>
-        <p class="text-muted">{{ lang._('Persistent rules injected at the top of the generated rule list. Custom rules survive subscription updates.') }}</p>
-        <hr/>
-    </div>
+{{ partial('OPNsense/Mihomo/styles') }}
 
-    <div class="col-xs-12">
-        <p>
-            <strong>{{ lang._('Allowed Rule Types:') }}</strong>
-            <span id="rules_types_container">
-                <code>DOMAIN</code>, <code>DOMAIN-SUFFIX</code>, <code>DOMAIN-KEYWORD</code>,
-                <code>IP-CIDR</code>, <code>IP-CIDR6</code>, <code>GEOIP</code>, <code>GEOSITE</code>,
-                <code>DST-PORT</code>
-            </span>
-        </p>
-        <div class="form-group">
-            <label>{{ lang._('Allowed Targets') }}</label>
-            <div id="rules_targets">
-                <span class="text-muted"><i class="fa fa-spinner fa-spin"></i> {{ lang._('Loading...') }}</span>
+<div class="mihomo-page">
+    <!-- 卡片 1：自定义规则编辑器 -->
+    <div class="content-box" style="padding-bottom: 1.5em; margin-bottom: 20px;">
+        <div class="col-xs-12">
+            <h2 class="mihomo-card-title">{{ lang._('自定义规则') }}</h2>
+            <p class="text-muted">{{ lang._('持久化自定义规则将插入到生成规则列表的顶部。自定义规则在订阅更新后依然保留。') }}</p>
+            <hr/>
+        </div>
+
+        <div class="col-xs-12">
+            <p>
+                <strong>{{ lang._('允许的规则类型') }}：</strong>
+                <span id="rules_types_container">
+                    <code>DOMAIN</code>, <code>DOMAIN-SUFFIX</code>, <code>DOMAIN-KEYWORD</code>,
+                    <code>IP-CIDR</code>, <code>IP-CIDR6</code>, <code>GEOIP</code>, <code>GEOSITE</code>,
+                    <code>DST-PORT</code>
+                </span>
+            </p>
+            <div class="form-group">
+                <label>{{ lang._('允许的目标策略') }}</label>
+                <div id="rules_targets">
+                    <span class="text-muted"><i class="fa fa-spinner fa-spin"></i> {{ lang._('加载中...') }}</span>
+                </div>
+                <span class="help-block">{{ lang._('仅上述列出的目标策略可作为规则的转发目标。') }}</span>
             </div>
-            <span class="help-block">{{ lang._('Only the targets listed above may be used as the destination of a rule.') }}</span>
+        </div>
+
+        <!-- 表格编辑器与源码模式容器 -->
+        <div class="col-xs-12">
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label style="margin-bottom: 0;">{{ lang._('自定义规则编辑器') }}</label>
+                    <div class="btn-group">
+                        <button class="btn btn-default btn-xs active" id="btn_mode_table" type="button">
+                            <i class="fa fa-table"></i> {{ lang._('表格模式') }}
+                        </button>
+                        <button class="btn btn-default btn-xs" id="btn_mode_raw" type="button">
+                            <i class="fa fa-code"></i> {{ lang._('源码模式') }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 文件级全局错误展示区 (line=0) -->
+                <div id="rules_file_error" class="alert alert-danger" style="display: none; margin-bottom: 10px;"></div>
+
+                <!-- 1. 表格编辑器视图 -->
+                <div id="rules_table_view">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-bordered table-condensed" id="tbl_rules_editor">
+                            <thead>
+                                <tr>
+                                    <th style="width: 50px; text-align: center;">{{ lang._('序号') }}</th>
+                                    <th style="width: 200px;">{{ lang._('类型') }}</th>
+                                    <th>{{ lang._('值') }}</th>
+                                    <th style="width: 220px;">{{ lang._('目标策略') }}</th>
+                                    <th style="width: 140px;">{{ lang._('选项') }}</th>
+                                    <th style="width: 70px; text-align: center;">{{ lang._('操作') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbl_rules_body">
+                                <!-- 动态行 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top: 5px;">
+                        <button class="btn btn-default btn-sm" id="btn_add_rule_row" type="button">
+                            <i class="fa fa-plus"></i> {{ lang._('添加规则') }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. 源码文本模式视图 -->
+                <div id="rules_raw_view" style="display: none;">
+                    <textarea id="rules_content" class="form-control mihomo-mono" rows="16" spellcheck="false" style="font-size: 13px; line-height: 1.4; height: 320px; resize: vertical;"></textarea>
+                    <span class="help-block">{{ lang._('每行一条规则，例如：DOMAIN-SUFFIX,example.com,DIRECT。以 # 开头的行将被忽略。') }}</span>
+                </div>
+
+                <span class="help-block" id="rules_counter" style="margin-top: 8px;">{{ lang._('行数') }}: 0 / 200 | {{ lang._('字节数') }}: 0 / 32768</span>
+            </div>
+        </div>
+
+        <div class="col-xs-12">
+            <button class="btn btn-primary" id="btn_rules_apply" type="button">
+                <b>{{ lang._('校验并应用') }}</b> <i id="btn_rules_apply_progress"></i>
+            </button>
+        </div>
+
+        <div class="col-xs-12" style="margin-top: 15px;">
+            <div id="rules_result" class="alert" style="display: none;"></div>
+            <table id="rules_error_table" class="table table-condensed table-bordered" style="display: none;">
+                <thead>
+                    <tr>
+                        <th style="width: 100px;">{{ lang._('行号') }}</th>
+                        <th>{{ lang._('错误信息') }}</th>
+                    </tr>
+                </thead>
+                <tbody id="rules_error_body"></tbody>
+            </table>
         </div>
     </div>
 
-    <!-- 表格编辑器与源码模式容器 -->
-    <div class="col-xs-12">
-        <div class="form-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <label style="margin-bottom: 0;">{{ lang._('Custom Rules Editor') }}</label>
-                <div class="btn-group">
-                    <button class="btn btn-default btn-xs active" id="btn_mode_table" type="button">
-                        <i class="fa fa-table"></i> {{ lang._('Table Mode') }}
-                    </button>
-                    <button class="btn btn-default btn-xs" id="btn_mode_raw" type="button">
-                        <i class="fa fa-code"></i> {{ lang._('Raw Source Mode') }}
-                    </button>
+    <!-- 卡片 2：当前生效规则（只读） -->
+    <div class="content-box" style="padding-bottom: 1.5em;">
+        <div class="col-xs-12">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h3 class="mihomo-card-title" style="margin-top: 10px;">{{ lang._('当前生效规则') }}</h3>
+                    <p class="text-muted">{{ lang._('Mihomo 内核当前实际运行的分流规则。与自定义规则匹配的条目已高亮标出。') }}</p>
                 </div>
-            </div>
-
-            <!-- 文件级全局错误展示区 (line=0) -->
-            <div id="rules_file_error" class="alert alert-danger" style="display: none; margin-bottom: 10px;"></div>
-
-            <!-- 1. 表格编辑器视图 -->
-            <div id="rules_table_view">
-                <div class="table-responsive">
-                    <table class="table table-striped table-bordered table-condensed" id="tbl_rules_editor">
-                        <thead>
-                            <tr>
-                                <th style="width: 50px; text-align: center;">#</th>
-                                <th style="width: 200px;">{{ lang._('Type') }}</th>
-                                <th>{{ lang._('Payload / Value') }}</th>
-                                <th style="width: 220px;">{{ lang._('Target / Policy') }}</th>
-                                <th style="width: 140px;">{{ lang._('Options') }}</th>
-                                <th style="width: 70px; text-align: center;">{{ lang._('Action') }}</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tbl_rules_body">
-                            <!-- 动态行 -->
-                        </tbody>
-                    </table>
-                </div>
-                <div style="margin-top: 5px;">
-                    <button class="btn btn-default btn-sm" id="btn_add_rule_row" type="button">
-                        <i class="fa fa-plus"></i> {{ lang._('Add Rule') }}
+                <div>
+                    <button class="btn btn-default" id="btn_refresh_effective" type="button">
+                        <i class="fa fa-refresh"></i> {{ lang._('刷新') }} <i id="effective_refresh_spinner"></i>
                     </button>
                 </div>
             </div>
-
-            <!-- 2. 源码文本模式视图 -->
-            <div id="rules_raw_view" style="display: none;">
-                <textarea id="rules_content" class="form-control" rows="16" spellcheck="false" style="font-family: Menlo, Monaco, Consolas, 'Courier New', monospace; font-size: 13px; line-height: 1.4; height: 320px; resize: vertical;"></textarea>
-                <span class="help-block">{{ lang._('One rule per line, for example: DOMAIN-SUFFIX,example.com,DIRECT. Lines starting with # are ignored.') }}</span>
-            </div>
-
-            <span class="help-block" id="rules_counter" style="margin-top: 8px;">{{ lang._('Lines') }}: 0 / 200 | {{ lang._('Bytes') }}: 0 / 32768</span>
+            <hr style="margin-top: 5px;"/>
         </div>
-    </div>
 
-    <div class="col-xs-12">
-        <button class="btn btn-primary" id="btn_rules_apply" type="button">
-            <b>{{ lang._('Validate & Apply') }}</b> <i id="btn_rules_apply_progress"></i>
-        </button>
-    </div>
-
-    <div class="col-xs-12" style="margin-top: 15px;">
-        <div id="rules_result" class="alert" style="display: none;"></div>
-        <table id="rules_error_table" class="table table-condensed table-bordered" style="display: none;">
-            <thead>
-                <tr>
-                    <th style="width: 100px;">{{ lang._('Line') }}</th>
-                    <th>{{ lang._('Message') }}</th>
-                </tr>
-            </thead>
-            <tbody id="rules_error_body"></tbody>
-        </table>
-    </div>
-</div>
-
-<!-- 当前生效规则只读视图 -->
-<div class="content-box" style="padding-bottom: 1.5em; margin-top: 20px;">
-    <div class="col-xs-12">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h3 style="margin-top: 10px;">{{ lang._('Effective Rules (Runtime)') }}</h3>
-                <p class="text-muted">{{ lang._('Real-time routing rules currently running in Mihomo core. Custom rules matching payloads are highlighted.') }}</p>
+        <div class="col-xs-12" style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div class="input-group" style="max-width: 400px; width: 100%;">
+                <input type="text" id="filter_effective_rules" class="form-control" placeholder="{{ lang._('搜索规则类型、值或策略...') }}">
+                <span class="input-group-addon"><i class="fa fa-search"></i></span>
             </div>
-            <div>
-                <button class="btn btn-default" id="btn_refresh_effective" type="button">
-                    <i class="fa fa-refresh"></i> {{ lang._('Refresh') }} <i id="effective_refresh_spinner"></i>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-default" id="effective_prev" type="button" disabled="disabled">
+                    <i class="fa fa-chevron-left"></i> {{ lang._('上一页') }}
+                </button>
+                <span class="btn btn-default disabled" id="effective_page_info" style="cursor: default; opacity: 1;">1 / 1</span>
+                <button class="btn btn-default" id="effective_next" type="button" disabled="disabled">
+                    {{ lang._('下一页') }} <i class="fa fa-chevron-right"></i>
                 </button>
             </div>
         </div>
-        <hr style="margin-top: 5px;"/>
-    </div>
 
-    <div class="col-xs-12" style="margin-bottom: 12px;">
-        <div class="input-group" style="max-width: 400px;">
-            <input type="text" id="filter_effective_rules" class="form-control" placeholder="{{ lang._('Search rule type, payload, or proxy...') }}">
-            <span class="input-group-addon"><i class="fa fa-search"></i></span>
-        </div>
-    </div>
-
-    <div class="col-xs-12">
-        <div id="effective_rules_alert" class="alert alert-warning" style="display: none;"></div>
-        <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
-            <table class="table table-striped table-bordered table-condensed" id="tbl_effective_rules">
-                <thead>
-                    <tr>
-                        <th style="width: 50px; text-align: center;">#</th>
-                        <th style="width: 180px;">{{ lang._('Type') }}</th>
-                        <th>{{ lang._('Payload') }}</th>
-                        <th style="width: 220px;">{{ lang._('Proxy / Target') }}</th>
-                        <th style="width: 100px; text-align: center;">{{ lang._('Source') }}</th>
-                    </tr>
-                </thead>
-                <tbody id="tbl_effective_body">
-                    <tr>
-                        <td colspan="5" class="text-center text-muted" id="tbl_effective_empty">
-                            <i class="fa fa-spinner fa-spin"></i> {{ lang._('Loading effective rules...') }}
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="text-muted" style="margin-top: 5px; font-size: 12px;" id="effective_count_label">
-            {{ lang._('Total rules') }}: 0
+        <div class="col-xs-12">
+            <div id="effective_rules_alert" class="alert alert-warning" style="display: none;"></div>
+            <div class="table-responsive mihomo-table-wrap" style="max-height: 480px; overflow-y: auto;">
+                <table class="table table-striped table-bordered table-condensed" id="tbl_effective_rules">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px; text-align: center;">{{ lang._('序号') }}</th>
+                            <th style="width: 180px;">{{ lang._('类型') }}</th>
+                            <th>{{ lang._('值') }}</th>
+                            <th style="width: 220px;">{{ lang._('目标策略') }}</th>
+                            <th style="width: 100px; text-align: center;">{{ lang._('来源') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbl_effective_body">
+                        <tr>
+                            <td colspan="5" class="text-center text-muted mihomo-empty" id="tbl_effective_empty">
+                                <i class="fa fa-spinner fa-spin"></i> {{ lang._('加载当前生效规则...') }}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="text-muted" style="margin-top: 5px; font-size: 12px;" id="effective_count_label">
+                {{ lang._('总计') }}: 0
+            </div>
         </div>
     </div>
 </div>
@@ -175,6 +189,13 @@ $(function () {
     var allowedTargets = ['DIRECT', 'REJECT', 'REJECT-DROP'];
     var currentMode = 'table'; // 'table' or 'raw'
     var effectiveRulesCache = [];
+    var effectivePagination = {
+        limit: 200,
+        offset: 0,
+        total: 0,
+        query: ''
+    };
+    var searchDebounceTimer = null;
 
     function utf8Bytes(text) {
         if (typeof Blob === 'function') {
@@ -203,15 +224,15 @@ $(function () {
         var lines = countRuleLines(text);
         var $counter = $('#rules_counter');
         $counter.removeClass('text-danger');
-        $counter.text('{{ lang._("Lines") }}: ' + lines + ' / ' + rulesLimits.maxLines + ' | ' +
-                      '{{ lang._("Bytes") }}: ' + bytes + ' / ' + rulesLimits.maxBytes);
+        $counter.text('{{ lang._("行数") }}: ' + lines + ' / ' + rulesLimits.maxLines + ' | ' +
+                      '{{ lang._("字节数") }}: ' + bytes + ' / ' + rulesLimits.maxBytes);
         if (bytes > rulesLimits.maxBytes || lines > rulesLimits.maxLines) {
             $counter.addClass('text-danger');
             if (lines > rulesLimits.maxLines) {
-                $counter.append(' - ' + '{{ lang._("Exceeds the maximum number of lines.") }}');
+                $counter.append(' - ' + '{{ lang._("超出最大行数限制。") }}');
             }
             if (bytes > rulesLimits.maxBytes) {
-                $counter.append(' - ' + '{{ lang._("Exceeds the maximum rule size.") }}');
+                $counter.append(' - ' + '{{ lang._("超出最大规则字节限制。") }}');
             }
         }
     }
@@ -223,7 +244,7 @@ $(function () {
         var $box = $('#rules_targets');
         $box.empty();
         if (!Array.isArray(allowedTargets) || allowedTargets.length === 0) {
-            $box.append($('<span class="text-muted"></span>').text('{{ lang._("No targets reported.") }}'));
+            $box.append($('<span class="text-muted"></span>').text('{{ lang._("未上报可用目标策略。") }}'));
             return;
         }
         $.each(allowedTargets, function (i, target) {
@@ -341,7 +362,7 @@ $(function () {
 
         // 操作列（删除按钮）
         var $tdAction = $('<td style="text-align: center; vertical-align: middle;"></td>');
-        var $btnDel = $('<button class="btn btn-default btn-xs btn-del-row" type="button" title="{{ lang._("Delete rule") }}"><i class="fa fa-trash-o text-danger"></i></button>');
+        var $btnDel = $('<button class="btn btn-default btn-xs btn-del-row" type="button" title="{{ lang._("删除规则") }}"><i class="fa fa-trash-o text-danger"></i></button>');
         $btnDel.on('click', function () {
             $tr.remove();
             reindexTableRows();
@@ -508,7 +529,7 @@ $(function () {
         ajaxGet('/api/mihomo/rules/get', {}, function (data) {
             if (!data || data.status !== 'ok') {
                 $('#rules_targets').empty().append(
-                    $('<span class="text-danger"></span>').text('{{ lang._("Failed to load custom rules.") }}')
+                    $('<span class="text-danger"></span>').text('{{ lang._("加载自定义规则失败。") }}')
                 );
                 return;
             }
@@ -535,19 +556,28 @@ $(function () {
         });
     }
 
-    function renderEffectiveRules(rules) {
+    function renderEffectiveRules(rules, total, offset, limit, query) {
         var $body = $('#tbl_effective_body');
         $body.empty();
         var customPayloads = getCustomPayloadsSet();
-        var filter = $.trim($('#filter_effective_rules').val() || '').toLowerCase();
-        var count = 0;
+        var totalNum = (typeof total === 'number') ? total : 0;
+        var offsetNum = (typeof offset === 'number') ? offset : 0;
+        var limitNum = (typeof limit === 'number') ? limit : 200;
+        var count = Array.isArray(rules) ? rules.length : 0;
 
-        if (!Array.isArray(rules) || rules.length === 0) {
+        if (!Array.isArray(rules) || count === 0) {
             var $emptyRow = $('<tr></tr>');
-            var $emptyTd = $('<td colspan="5" class="text-center text-muted"></td>').text('{{ lang._("No effective rules found.") }}');
+            var $emptyTd = $('<td colspan="5" class="text-center text-muted mihomo-empty"></td>').text('{{ lang._("暂无生效规则") }}');
             $emptyRow.append($emptyTd);
             $body.append($emptyRow);
-            $('#effective_count_label').text('{{ lang._("Total rules") }}: 0');
+            if (query) {
+                $('#effective_count_label').text('{{ lang._("匹配") }} 0 {{ lang._("条") }} ({{ lang._("当前窗口") }} 0 - 0)');
+            } else {
+                $('#effective_count_label').text('{{ lang._("总计") }} 0 {{ lang._("条") }} ({{ lang._("当前窗口") }} 0 - 0)');
+            }
+            $('#effective_page_info').text('1 / 1');
+            $('#effective_prev').prop('disabled', true);
+            $('#effective_next').prop('disabled', true);
             return;
         }
 
@@ -556,26 +586,17 @@ $(function () {
             var payload = (r && r.payload) ? String(r.payload) : '';
             var proxy = (r && r.proxy) ? String(r.proxy) : '';
 
-            if (filter !== '') {
-                var match = type.toLowerCase().indexOf(filter) !== -1 ||
-                            payload.toLowerCase().indexOf(filter) !== -1 ||
-                            proxy.toLowerCase().indexOf(filter) !== -1;
-                if (!match) {
-                    return;
-                }
-            }
-
-            count++;
             var $tr = $('<tr></tr>');
 
-            var $tdIdx = $('<td style="text-align: center; vertical-align: middle;"></td>').text(idx + 1);
+            // 行号 offset + index + 1
+            var $tdIdx = $('<td style="text-align: center; vertical-align: middle;"></td>').text(offsetNum + idx + 1);
             $tr.append($tdIdx);
 
             var $tdType = $('<td style="vertical-align: middle;"></td>');
             $('<span class="label label-default"></span>').text(type).appendTo($tdType);
             $tr.append($tdType);
 
-            var $tdPayload = $('<td style="vertical-align: middle; font-family: monospace;"></td>').text(payload);
+            var $tdPayload = $('<td class="mihomo-mono" style="vertical-align: middle;"></td>').text(payload);
             $tr.append($tdPayload);
 
             var $tdProxy = $('<td style="vertical-align: middle;"></td>');
@@ -590,7 +611,7 @@ $(function () {
 
             var $tdSource = $('<td style="text-align: center; vertical-align: middle;"></td>');
             if (payload && customPayloads[payload]) {
-                $('<span class="label label-warning"></span>').text('{{ lang._("Custom") }}').appendTo($tdSource);
+                $('<span class="label label-warning"></span>').text('{{ lang._("自定义") }}').appendTo($tdSource);
             } else {
                 $('<span class="text-muted">-</span>').appendTo($tdSource);
             }
@@ -599,43 +620,98 @@ $(function () {
             $body.append($tr);
         });
 
-        $('#effective_count_label').text('{{ lang._("Total rules") }}: ' + rules.length + (filter !== '' ? ' (' + count + ' matched)' : ''));
+        // 窗口信息：第 offset + 1 至 offset + count 条
+        var startIdx = offsetNum + 1;
+        var endIdx = offsetNum + count;
+        var labelPrefix = query ? '{{ lang._("匹配") }} ' + totalNum + ' {{ lang._("条") }}' : '{{ lang._("总计") }} ' + totalNum + ' {{ lang._("条") }}';
+        $('#effective_count_label').text(labelPrefix + ' ({{ lang._("当前窗口") }} ' + startIdx + ' - ' + endIdx + ')');
+
+        // 分页按钮与页码更新
+        var totalPages = Math.max(1, Math.ceil(totalNum / limitNum));
+        var currentPage = Math.floor(offsetNum / limitNum) + 1;
+        $('#effective_page_info').text(currentPage + ' / ' + totalPages);
+        $('#effective_prev').prop('disabled', offsetNum <= 0);
+        $('#effective_next').prop('disabled', endIdx >= totalNum);
     }
 
-    function loadEffectiveRules() {
+    function loadEffectiveRules(resetOffset) {
+        if (resetOffset) {
+            effectivePagination.offset = 0;
+        }
+
         var $spinner = $('#effective_refresh_spinner');
         var $alert = $('#effective_rules_alert');
         $spinner.addClass('fa fa-spinner fa-spin');
         $alert.hide().empty();
 
-        ajaxGet('/api/mihomo/rules/getEffectiveRules', {}, function (data) {
+        var queryText = $.trim($('#filter_effective_rules').val() || '');
+        effectivePagination.query = queryText;
+
+        var params = {
+            limit: effectivePagination.limit,
+            offset: effectivePagination.offset,
+            q: effectivePagination.query
+        };
+
+        ajaxGet('/api/mihomo/rules/getEffectiveRules', params, function (data) {
             $spinner.removeClass('fa fa-spinner fa-spin');
             if (!data || data.status !== 'ok') {
                 $alert.removeClass('alert-warning').addClass('alert-danger')
-                    .text('{{ lang._("Failed to fetch effective rules.") }}')
+                    .text('{{ lang._("获取生效规则失败。") }}')
                     .show();
                 return;
             }
             if (!data.reachable) {
-                var note = (data.note) ? String(data.note) : '{{ lang._("Mihomo API unreachable") }}';
+                var note = (data.note) ? String(data.note) : '{{ lang._("无法连接 Mihomo API 服务") }}';
                 $alert.removeClass('alert-danger').addClass('alert-warning')
                     .text(note)
                     .show();
                 effectiveRulesCache = [];
-                renderEffectiveRules([]);
+                effectivePagination.total = 0;
+                renderEffectiveRules([], 0, 0, effectivePagination.limit, effectivePagination.query);
                 return;
             }
+
             effectiveRulesCache = Array.isArray(data.rules) ? data.rules : [];
-            renderEffectiveRules(effectiveRulesCache);
+            effectivePagination.total = (typeof data.total === 'number') ? data.total : effectiveRulesCache.length;
+            effectivePagination.offset = (typeof data.offset === 'number') ? data.offset : effectivePagination.offset;
+            effectivePagination.limit = (typeof data.limit === 'number') ? data.limit : effectivePagination.limit;
+
+            renderEffectiveRules(
+                effectiveRulesCache,
+                effectivePagination.total,
+                effectivePagination.offset,
+                effectivePagination.limit,
+                effectivePagination.query
+            );
         });
     }
 
     $('#btn_refresh_effective').on('click', function () {
-        loadEffectiveRules();
+        loadEffectiveRules(false);
+    });
+
+    $('#effective_prev').on('click', function () {
+        if (effectivePagination.offset > 0) {
+            effectivePagination.offset = Math.max(0, effectivePagination.offset - effectivePagination.limit);
+            loadEffectiveRules(false);
+        }
+    });
+
+    $('#effective_next').on('click', function () {
+        if (effectivePagination.offset + effectivePagination.limit < effectivePagination.total) {
+            effectivePagination.offset = effectivePagination.offset + effectivePagination.limit;
+            loadEffectiveRules(false);
+        }
     });
 
     $('#filter_effective_rules').on('input', function () {
-        renderEffectiveRules(effectiveRulesCache);
+        if (searchDebounceTimer) {
+            clearTimeout(searchDebounceTimer);
+        }
+        searchDebounceTimer = setTimeout(function () {
+            loadEffectiveRules(true);
+        }, 350);
     });
 
     $('#rules_content').on('input', updateCounter);
@@ -663,7 +739,7 @@ $(function () {
 
             if (data && data.status === 'ok') {
                 $result.addClass('alert-success')
-                    .text(data.message ? String(data.message) : '{{ lang._("Custom rules validated and applied.") }}')
+                    .text(data.message ? String(data.message) : '{{ lang._("自定义规则校验通过并已应用。") }}')
                     .show();
                 // 成功后同步更新 raw textarea 与刷新生效规则
                 $('#rules_content').val(content);
@@ -696,7 +772,7 @@ $(function () {
 
                     // 错误明细表仍保留展示
                     var $tr = $('<tr></tr>');
-                    $('<td></td>').text(lineNum > 0 ? String(lineNum) : 'File').appendTo($tr);
+                    $('<td></td>').text(lineNum > 0 ? String(lineNum) : '文件').appendTo($tr);
                     $('<td></td>').text(msg).appendTo($tr);
                     $errorBody.append($tr);
                 });
@@ -704,7 +780,7 @@ $(function () {
             }
 
             $result.addClass('alert-danger')
-                .text((data && data.message) ? String(data.message) : '{{ lang._("Custom rules validation failed.") }}')
+                .text((data && data.message) ? String(data.message) : '{{ lang._("自定义规则校验失败。") }}')
                 .show();
         });
     });

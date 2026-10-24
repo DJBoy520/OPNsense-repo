@@ -55,15 +55,15 @@ pass "system_status.py contains TRANSPORT_MODE_FILE, HEV_TUN_DEVICE, UP+RUNNING 
 
 # ---------------------------------------------------------------------------
 echo "--> Test 3: status.volt 静态断言..."
-# MODE 徽章：TRANSPARENT 与 PROXY 分支
+# MODE 徽章：透明代理 与 代理 分支
 grep -q 'data\.transport_mode === .transparent.' "$STATUS_VOLT" || \
     fail "status.volt missing data.transport_mode === 'transparent' branch"
-grep -q 'MODE: TRANSPARENT' "$STATUS_VOLT" || \
-    fail "status.volt missing 'MODE: TRANSPARENT' badge"
-grep -q 'MODE: PROXY' "$STATUS_VOLT" || \
-    fail "status.volt missing 'MODE: PROXY' badge"
-grep -q 'MODE: DIRECT' "$STATUS_VOLT" || \
-    fail "status.volt missing 'MODE: DIRECT' badge"
+grep -q '模式：透明代理' "$STATUS_VOLT" || \
+    fail "status.volt missing '模式：透明代理' badge"
+grep -q '模式：代理' "$STATUS_VOLT" || \
+    fail "status.volt missing '模式：代理' badge"
+grep -q '模式：直连' "$STATUS_VOLT" || \
+    fail "status.volt missing '模式：直连' badge"
 
 # TUN 徽章：UP/DOWN/SOCKS 三态且 SOCKS 不带 label-danger
 grep -q "data\.tun_status === 'UP'" "$STATUS_VOLT" || \

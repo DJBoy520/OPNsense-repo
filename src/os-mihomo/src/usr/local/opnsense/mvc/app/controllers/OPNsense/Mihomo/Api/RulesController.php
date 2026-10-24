@@ -224,26 +224,48 @@ class RulesController extends ApiControllerBase
     }
 
     /**
-     * 读取生效的分流规则（调用 mihomo external-controller /rules 接口）
+     * 读取生效的分流规则（流式读取 config.yaml rules: 块 + 分页与搜索；/version 安全探测）
      *
      * 遵循契约：
      * - 服务端解析 /usr/local/etc/mihomo/config.yaml：
      *   ^external-controller: 的 host:port（0.0.0.0 归一化为 127.0.0.1）
      *   ^secret: 实际值（非空才带 Authorization: Bearer 头）
-     * - curl 调 http://<host>:<port>/rules（-m 3 超时；所有拼参 escapeshellarg）
+     * - curl 调 http://<host>:<port>/version 进行安全探测（-m 3 超时；所有拼参 escapeshellarg）
      * - 为防止进程列表泄漏 secret，通过 0600 临时 curl 配置文件传 header
-     * - 非 200/失败/超时 → 返回 {status:"ok", reachable:false, rules:[], note:"mihomo API 不可达"}，绝不抛错
-     * - 成功 → {status:"ok", reachable:true, rules:<mihomo 返回的 rules 数组透传>}
+     * - 非 200/失败/超时 → 返回 {status:"ok", reachable:false, rules:[], total:0, offset:0, limit:$limit, truncated:false, query:$q, note:"mihomo API 不可达"}，绝不抛错
+     * - 可达时不再请求 /rules，改用 fopen/fgets 流式读取 config.yaml rules: 块
+     * - 查询参数：limit（默认 200，1~1000）、offset（>=0）、q（<=200 字符，去控制字符）
+     * - 返回 {status:'ok', reachable:true, rules:[{type,payload,proxy}], total, offset, limit, truncated, query}
+     * - 规则解析：MATCH,proxy 的 payload 为空、proxy 取第二段；其余取前三段；坏行跳过
      * - secret 绝不能出现在响应里
      */
     public function getEffectiveRulesAction()
     {
+        $rawLimit = $this->request->get('limit', 'int', 200);
+        $limit = ($rawLimit !== null && (int)$rawLimit >= 1) ? min(1000, (int)$rawLimit) : 200;
+
+        $rawOffset = $this->request->get('offset', 'int', 0);
+        $offset = ($rawOffset !== null && (int)$rawOffset >= 0) ? (int)$rawOffset : 0;
+
+        $rawQ = $this->request->get('q', 'string', '');
+        $q = '';
+        if ($rawQ !== null && is_scalar($rawQ)) {
+            // <=200 字符，去除控制字符（保留常规 Unicode/中文与普通 ASCII）
+            $sanitized = preg_replace('/[\x00-\x1F\x7F]/u', '', (string)$rawQ);
+            $q = mb_substr(trim($sanitized), 0, 200, 'UTF-8');
+        }
+
         $addr = $this->readApiAddr();
         if ($addr === null) {
             return [
                 'status' => 'ok',
                 'reachable' => false,
                 'rules' => [],
+                'total' => 0,
+                'offset' => $offset,
+                'limit' => $limit,
+                'truncated' => false,
+                'query' => $q,
                 'note' => 'mihomo API 不可达',
             ];
         }
@@ -252,7 +274,7 @@ class RulesController extends ApiControllerBase
         $port = $addr['port'];
         $secret = $this->readConfigSecret();
 
-        $url = 'http://' . $host . ':' . $port . '/rules';
+        $url = 'http://' . $host . ':' . $port . '/version';
         $cmd = '/usr/local/bin/curl -s -m 3 --connect-timeout 2';
 
         $cfgFile = null;
@@ -283,6 +305,11 @@ class RulesController extends ApiControllerBase
                 'status' => 'ok',
                 'reachable' => false,
                 'rules' => [],
+                'total' => 0,
+                'offset' => $offset,
+                'limit' => $limit,
+                'truncated' => false,
+                'query' => $q,
                 'note' => 'mihomo API 不可达',
             ];
         }
@@ -293,36 +320,169 @@ class RulesController extends ApiControllerBase
                 'status' => 'ok',
                 'reachable' => false,
                 'rules' => [],
+                'total' => 0,
+                'offset' => $offset,
+                'limit' => $limit,
+                'truncated' => false,
+                'query' => $q,
                 'note' => 'mihomo API 不可达',
             ];
         }
 
-        $body = substr($output, 0, $lastNewline);
         $httpCode = trim(substr($output, $lastNewline + 1));
-
         if ($httpCode !== '200') {
             return [
                 'status' => 'ok',
                 'reachable' => false,
                 'rules' => [],
+                'total' => 0,
+                'offset' => $offset,
+                'limit' => $limit,
+                'truncated' => false,
+                'query' => $q,
                 'note' => 'mihomo API 不可达',
             ];
         }
 
-        $decoded = json_decode($body, true);
-        if (!is_array($decoded) || !isset($decoded['rules']) || !is_array($decoded['rules'])) {
-            return [
-                'status' => 'ok',
-                'reachable' => false,
-                'rules' => [],
-                'note' => 'mihomo API 不可达',
-            ];
-        }
+        // API 探测可达，流式解析 config.yaml 的 rules: 块
+        $parsed = $this->parseConfigRulesPaged(self::CONFIG_FILE, $offset, $limit, $q);
 
         return [
             'status' => 'ok',
             'reachable' => true,
-            'rules' => $decoded['rules'],
+            'rules' => $parsed['rules'],
+            'total' => $parsed['total'],
+            'offset' => $offset,
+            'limit' => $limit,
+            'truncated' => $parsed['truncated'],
+            'query' => $q,
+        ];
+    }
+
+    /**
+     * 流式读取 config.yaml 中的 rules: 块，逐行匹配与分页
+     */
+    private function parseConfigRulesPaged($configFile, $offset, $limit, $q)
+    {
+        $rules = [];
+        $total = 0;
+        $truncated = false;
+
+        if (!is_file($configFile) || !is_readable($configFile)) {
+            return [
+                'rules' => $rules,
+                'total' => $total,
+                'truncated' => $truncated,
+            ];
+        }
+
+        $handle = @fopen($configFile, 'r');
+        if ($handle === false) {
+            return [
+                'rules' => $rules,
+                'total' => $total,
+                'truncated' => $truncated,
+            ];
+        }
+
+        $inRules = false;
+        $hasQ = ($q !== '');
+        $qLower = $hasQ ? mb_strtolower($q, 'UTF-8') : '';
+
+        while (($line = fgets($handle)) !== false) {
+            $line = rtrim($line, "\r\n");
+
+            if (!$inRules) {
+                if (preg_match('/^rules[ \t]*:/', $line) === 1) {
+                    $inRules = true;
+                }
+                continue;
+            }
+
+            // 遇到下一个顶层键退出 rules 块
+            if ($line !== '' && preg_match('/^[^ \t#-]/', $line) === 1) {
+                break;
+            }
+
+            // 规则行必须以 "- " 引导
+            if (preg_match('/^[ \t]*-[ \t]+(.*)$/', $line, $matches) !== 1) {
+                continue;
+            }
+
+            $rawRule = trim($matches[1]);
+            if ($rawRule === '' || $rawRule[0] === '#') {
+                continue;
+            }
+
+            // 剥离可能的外层引号（如 - "DOMAIN-SUFFIX,google.com,DIRECT" 或 - '...'）
+            if (($rawRule[0] === '"' && substr($rawRule, -1) === '"') ||
+                ($rawRule[0] === "'" && substr($rawRule, -1) === "'")) {
+                $rawRule = substr($rawRule, 1, -1);
+            }
+
+            // 逗号分段
+            $parts = explode(',', $rawRule);
+            $partCount = count($parts);
+            if ($partCount < 2) {
+                // 坏行跳过
+                continue;
+            }
+
+            $type = trim($parts[0]);
+            if ($type === '') {
+                continue;
+            }
+
+            $payload = '';
+            $proxy = '';
+
+            if (strcasecmp($type, 'MATCH') === 0) {
+                // MATCH,proxy 的 payload 为空、proxy 取第二段
+                $proxy = trim($parts[1]);
+            } else {
+                if ($partCount < 3) {
+                    // 非 MATCH 至少需要 3 段
+                    continue;
+                }
+                // 其余 type/payload/proxy 取前三段
+                $payload = trim($parts[1]);
+                $proxy = trim($parts[2]);
+            }
+
+            if ($proxy === '') {
+                continue;
+            }
+
+            // 搜索过滤（支持 type / payload / proxy）
+            if ($hasQ) {
+                $typeMatch = (mb_stripos($type, $qLower, 0, 'UTF-8') !== false);
+                $payloadMatch = ($payload !== '' && mb_stripos($payload, $qLower, 0, 'UTF-8') !== false);
+                $proxyMatch = (mb_stripos($proxy, $qLower, 0, 'UTF-8') !== false);
+                if (!$typeMatch && !$payloadMatch && !$proxyMatch) {
+                    continue;
+                }
+            }
+
+            // 匹配项计数
+            if ($total >= $offset && count($rules) < $limit) {
+                $rules[] = [
+                    'type' => $type,
+                    'payload' => $payload,
+                    'proxy' => $proxy,
+                ];
+            }
+            $total++;
+        }
+
+        fclose($handle);
+
+        // 当前窗口之后仍有匹配项时标记 truncated，供前端/调用方判断
+        $truncated = (($offset + count($rules)) < $total);
+
+        return [
+            'rules' => $rules,
+            'total' => $total,
+            'truncated' => $truncated,
         ];
     }
 

@@ -46,6 +46,9 @@ class SubscriptionController extends ApiControllerBase
     const CRON_DESCRIPTION = 'os-mihomo auto sub-update';
     const CRON_COMMAND = 'mihomo sub-update';
     const STATUS_FILE = '/var/db/os-mihomo/last-sub-update.json';
+    const STRATEGY_MODE_FILE = '/var/db/os-mihomo/strategy-mode';
+    const STRATEGY_CACHE_FILE = '/var/db/os-mihomo/subscription-strategy.yaml';
+    const CACHE_FILE = '/var/db/os-mihomo/subscription-cache.yaml';
     /* sub.sh 的 mkdir 锁目录，pid 文件为 <LOCK_DIR>/pid */
     const LOCK_DIR = '/var/run/mihomo-sub.lock';
 
@@ -57,6 +60,7 @@ class SubscriptionController extends ApiControllerBase
     {
         $model = new Mihomo();
         $url = (string)$model->subscription->url;
+        $strategy = (string)$model->subscription->strategy;
 
         $lastUpdate = null;
         if (is_file(self::STATUS_FILE) && is_readable(self::STATUS_FILE)) {
@@ -76,6 +80,8 @@ class SubscriptionController extends ApiControllerBase
                 'url_masked' => $url !== '' ? $this->maskUrl($url) : '',
                 'auto_update' => (int)(string)$model->subscription->auto_update,
                 'auto_interval' => (string)$model->subscription->auto_interval,
+                'strategy' => $strategy !== '' ? $strategy : 'subscription',
+                'strategy_cache' => is_file(self::STRATEGY_CACHE_FILE),
             ],
             'last_update' => $lastUpdate,
         ];
@@ -91,7 +97,7 @@ class SubscriptionController extends ApiControllerBase
         }
 
         $data = $this->readSubscriptionInput();
-        foreach (['url', 'auto_update', 'auto_interval', 'clear_url'] as $key) {
+        foreach (['url', 'auto_update', 'auto_interval', 'clear_url', 'strategy'] as $key) {
             if (isset($data[$key]) && !is_scalar($data[$key])) {
                 return ['status' => 'failed', 'message' => '订阅参数格式无效'];
             }
@@ -99,6 +105,15 @@ class SubscriptionController extends ApiControllerBase
 
         $model = new Mihomo();
         $currentUrl = (string)$model->subscription->url;
+        $currentStrategy = (string)$model->subscription->strategy;
+        if ($currentStrategy === '') {
+            $currentStrategy = 'subscription';
+        }
+
+        $strategy = isset($data['strategy']) ? trim((string)$data['strategy']) : $currentStrategy;
+        if (!in_array($strategy, ['subscription', 'template'], true)) {
+            return ['status' => 'failed', 'message' => '策略来源必须为 subscription（订阅自带）或 template（插件内置）'];
+        }
 
         // 空 url 语义：未提交或留空时保持原值（面板约定“留空=不修改”）；
         // 仅显式提交 clear_url=1 时才清空。
@@ -126,12 +141,37 @@ class SubscriptionController extends ApiControllerBase
             $model->subscription->url = $url;
             $model->subscription->auto_update = $autoUpdate ? '1' : '0';
             $model->subscription->auto_interval = $interval;
+            $model->subscription->strategy = $strategy;
             $model->serializeToConfig();
             if (Config::getInstance()->save() === false) {
                 throw new \Exception('config.xml 写入失败（可能被锁定）');
             }
         } catch (\Exception $e) {
             return ['status' => 'failed', 'message' => '保存订阅设置失败: ' . $e->getMessage()];
+        }
+
+        $message = '订阅设置已保存';
+
+        // 4. 保存成功后写模式文件（原子：同目录 tempnam → chmod 0600 → $strategy . "\n" → rename → chmod 0600；目录 /var/db/os-mihomo 缺失则 mkdir 0750）
+        if (!$this->writeStrategyMode($strategy)) {
+            $message .= '；模式状态文件写入失败（下次保存会重试）';
+        }
+
+        // 5. 若策略值发生变化（保存前快照旧值）：
+        $recompose = null;
+        if ($strategy !== $currentStrategy) {
+            /* 订阅模式必须已有策略缓存，否则 recompose 会静默回退模板，给出误导性的“已合成”提示 */
+            $strategyReady = ($strategy === 'template') || is_file(self::STRATEGY_CACHE_FILE);
+            if ($strategyReady && is_file(self::CACHE_FILE) && filesize(self::CACHE_FILE) > 0) {
+                $recompose = trim((string)(new Backend())->configdRun('mihomo rules-recompose'));
+                if (stripos($recompose, 'OK') !== false) {
+                    $message .= '；配置已重新合成';
+                } else {
+                    $message .= '；策略来源已保存，但重新合成失败（旧配置继续运行）: ' . $this->truncate($recompose);
+                }
+            } else {
+                $message .= '；尚无可用的订阅策略缓存，请点击「立即更新」以应用新策略来源';
+            }
         }
 
         // env 由 PHP 写入器做第二份强校验与 POSIX 单引号转义；
@@ -165,7 +205,10 @@ class SubscriptionController extends ApiControllerBase
         return [
             'status' => 'ok',
             'url_masked' => $url !== '' ? $this->maskUrl($url) : '',
-            'message' => '订阅设置已保存',
+            'strategy' => $strategy,
+            'strategy_cache' => is_file(self::STRATEGY_CACHE_FILE),
+            'recompose' => $recompose,
+            'message' => $message,
         ];
     }
 
@@ -204,7 +247,7 @@ class SubscriptionController extends ApiControllerBase
         }
 
         $flat = [];
-        foreach (['url', 'auto_update', 'auto_interval', 'clear_url'] as $key) {
+        foreach (['url', 'auto_update', 'auto_interval', 'clear_url', 'strategy'] as $key) {
             $value = $this->request->getPost($key);
             if ($value !== null) {
                 $flat[$key] = $value;
@@ -315,5 +358,38 @@ class SubscriptionController extends ApiControllerBase
             return substr($text, 0, $limit) . '...';
         }
         return $text;
+    }
+
+    /**
+     * 原子写入策略模式状态文件 (/var/db/os-mihomo/strategy-mode)
+     */
+    private function writeStrategyMode($strategy)
+    {
+        $dir = dirname(self::STRATEGY_MODE_FILE);
+        if (!is_dir($dir)) {
+            if (!@mkdir($dir, 0750, true) && !is_dir($dir)) {
+                return false;
+            }
+            @chmod($dir, 0750);
+        }
+
+        $tmpFile = @tempnam($dir, 'mode_');
+        if ($tmpFile === false) {
+            return false;
+        }
+
+        @chmod($tmpFile, 0600);
+        if (@file_put_contents($tmpFile, $strategy . "\n") === false) {
+            @unlink($tmpFile);
+            return false;
+        }
+
+        if (!@rename($tmpFile, self::STRATEGY_MODE_FILE)) {
+            @unlink($tmpFile);
+            return false;
+        }
+
+        @chmod(self::STRATEGY_MODE_FILE, 0600);
+        return true;
     }
 }

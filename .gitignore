@@ -2,3 +2,5 @@
 ._*
 .private/
 work/
+.zcode/
+output/verify-*/

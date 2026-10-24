@@ -4,6 +4,10 @@
 # 本文件仅供 source 引入，source 时零副作用。
 
 MIHOMO_LOCK_DIR="${MIHOMO_LOCK_DIR:-/var/run/mihomo-sub.lock}"
+MIHOMO_STRATEGY_MODE_FILE="${MIHOMO_STRATEGY_MODE_FILE:-/var/db/os-mihomo/strategy-mode}"
+MIHOMO_STRATEGY_FILE="${MIHOMO_STRATEGY_FILE:-/var/db/os-mihomo/subscription-strategy.yaml}"
+# 本次合成的策略输入（sub.sh 用临时片段）；为空时 compose 读取持久缓存 MIHOMO_STRATEGY_FILE
+MIHOMO_STRATEGY_INPUT_FILE="${MIHOMO_STRATEGY_INPUT_FILE:-}"
 MIHOMO_TEMPLATE_FILE="${MIHOMO_TEMPLATE_FILE:-/usr/local/etc/mihomo/sub/template_config.yaml}"
 MIHOMO_RULES_FILE="${MIHOMO_RULES_FILE:-/usr/local/etc/mihomo/custom-rules.txt}"
 MIHOMO_PANEL_STATE_FILE="${MIHOMO_PANEL_STATE_FILE:-/var/db/os-mihomo/panel-state.env}"
@@ -14,6 +18,166 @@ MIHOMO_ATOMIC_UPDATER="${MIHOMO_ATOMIC_UPDATER:-/usr/local/opnsense/scripts/OPNs
 MIHOMO_BIN="${MIHOMO_BIN:-/usr/local/bin/mihomo}"
 MIHOMO_CONF_DIR="${MIHOMO_CONF_DIR:-/usr/local/etc/mihomo}"
 LOCK_HELD="${LOCK_HELD:-0}"
+
+# 策略合成全局状态变量（供 sub.sh 或外部查询 compose 结果）
+MIHOMO_COMPOSE_STRATEGY_USED=""
+MIHOMO_COMPOSE_STRATEGY_GROUPS=0
+MIHOMO_COMPOSE_STRATEGY_RULES=0
+
+# 读取策略来源模式：subscription | template
+mihomo_lib_strategy_mode() {
+    _mode="${MIHOMO_STRATEGY_MODE:-}"
+    if [ "$_mode" = "subscription" ] || [ "$_mode" = "template" ]; then
+        printf '%s\n' "$_mode"
+        return 0
+    fi
+    if [ -r "$MIHOMO_STRATEGY_MODE_FILE" ]; then
+        _file_mode="$(head -n 1 "$MIHOMO_STRATEGY_MODE_FILE" 2>/dev/null | tr -d '\r\n')"
+        if [ "$_file_mode" = "subscription" ] || [ "$_file_mode" = "template" ]; then
+            printf '%s\n' "$_file_mode"
+            return 0
+        fi
+    fi
+    printf '%s\n' "subscription"
+}
+
+# 顶层块提取：从 ^<key>[ \t]*: 开始，到下一个顶层键 ^[A-Za-z_][A-Za-z0-9_-]*[ \t]*: 之前
+mihomo_lib_extract_top_block() {
+    _top_raw_yaml="${1:-}"
+    _top_key="${2:-}"
+    _top_out_file="${3:-}"
+
+    [ -f "$_top_raw_yaml" ] || return 1
+    [ -n "$_top_key" ] || return 1
+    [ -n "$_top_out_file" ] || return 1
+
+    : > "$_top_out_file" || return 1
+
+    awk -v key="$_top_key" '
+      BEGIN {
+          found = 0
+          key_regex = "^" key "[ \t]*:"
+          top_regex = "^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:"
+      }
+      $0 ~ key_regex {
+          found = 1
+          print
+          next
+      }
+      found {
+          if ($0 ~ top_regex) exit 0
+          print
+      }
+      END {
+          if (!found) exit 1
+      }
+    ' "$_top_raw_yaml" > "$_top_out_file" || {
+        _top_rc=$?
+        : > "$_top_out_file"
+        return "$_top_rc"
+    }
+    return 0
+}
+
+# 策略片段提取：按顺序提取 5 个块，首行加注释，必须同时含 proxy-groups 与 rules
+mihomo_lib_extract_strategy() {
+    _strat_raw_yaml="${1:-}"
+    _strat_out_file="${2:-}"
+
+    [ -f "$_strat_raw_yaml" ] || return 1
+    [ -n "$_strat_out_file" ] || return 1
+
+    _strat_tmp_dir="$(dirname "$_strat_out_file")"
+    mkdir -p "$_strat_tmp_dir" 2>/dev/null || true
+    _tmp_part="$(mktemp "$_strat_tmp_dir/strat_part.XXXXXX" 2>/dev/null || mktemp /tmp/strat_part.XXXXXX)" || return 1
+
+    printf '%s\n' "# subscription strategy (auto-extracted; do not edit)" > "$_strat_out_file"
+
+    _has_groups=0
+    _has_rules=0
+
+    for _blk in proxy-providers proxy-groups rule-providers sub-rules rules; do
+        if mihomo_lib_extract_top_block "$_strat_raw_yaml" "$_blk" "$_tmp_part"; then
+            cat "$_tmp_part" >> "$_strat_out_file"
+            [ "$_blk" = "proxy-groups" ] && _has_groups=1
+            [ "$_blk" = "rules" ] && _has_rules=1
+        fi
+    done
+    rm -f "$_tmp_part"
+
+    if [ "$_has_groups" -eq 1 ] && [ "$_has_rules" -eq 1 ]; then
+        return 0
+    fi
+
+    : > "$_strat_out_file"
+    return 1
+}
+
+# 策略片段校验：文件非空且同时含 ^proxy-groups[ \t]*: 与 ^rules[ \t]*:
+mihomo_lib_strategy_valid() {
+    _file="${1:-}"
+    [ -f "$_file" ] && [ -s "$_file" ] || return 1
+    grep -Eq '^proxy-groups[ \t]*:' "$_file" && grep -Eq '^rules[ \t]*:' "$_file"
+}
+
+# 条目计数：统计顶层块内 ^[ \t]*-[ \t] 行数
+mihomo_lib_count_block_items() {
+    _file="${1:-}"
+    _key="${2:-}"
+    if [ ! -f "$_file" ] || [ -z "$_key" ]; then
+        echo "0"
+        return 0
+    fi
+    awk -v key="$_key" '
+      BEGIN {
+          in_block = 0
+          count = 0
+          key_regex = "^" key "[ \t]*:"
+          top_regex = "^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:"
+      }
+      $0 ~ key_regex {
+          in_block = 1
+          next
+      }
+      in_block && $0 ~ top_regex {
+          in_block = 0
+      }
+      in_block && (/^- / || /^  - /) {
+          count++
+      }
+      END {
+          print count + 0
+      }
+    ' "$_file" | tr -d ' '
+}
+
+# 策略缓存写入：原子写入 MIHOMO_STRATEGY_FILE
+mihomo_lib_strategy_store() {
+    _bundle="${1:-}"
+    [ -f "$_bundle" ] || return 1
+    _strat_dir="$(dirname "$MIHOMO_STRATEGY_FILE")"
+    mkdir -p "$_strat_dir" 2>/dev/null || return 1
+    chmod 0750 "$_strat_dir" 2>/dev/null || true
+
+    _tmp_store="$(mktemp "$_strat_dir/strat.XXXXXX" 2>/dev/null || mktemp /tmp/strat.XXXXXX)" || return 1
+    chmod 0600 "$_tmp_store" 2>/dev/null || true
+    cat "$_bundle" > "$_tmp_store" || {
+        rm -f "$_tmp_store"
+        return 1
+    }
+    chmod 0600 "$_tmp_store" 2>/dev/null || true
+    mv -f "$_tmp_store" "$MIHOMO_STRATEGY_FILE" || {
+        rm -f "$_tmp_store"
+        return 1
+    }
+    chmod 0600 "$MIHOMO_STRATEGY_FILE" 2>/dev/null || true
+    return 0
+}
+
+# 策略缓存移除
+mihomo_lib_strategy_remove() {
+    rm -f "$MIHOMO_STRATEGY_FILE" 2>/dev/null || true
+}
 
 # 订阅操作加锁（含陈旧锁自动清理机制）
 mihomo_lib_lock_acquire() {
@@ -239,6 +403,71 @@ mihomo_lib_compose() {
         return 1
     fi
 
+    # 策略来源处理（subscription 模式下替换策略组与分流规则，否则沿用模板）
+    _strategy_mode="$(mihomo_lib_strategy_mode)"
+    _strategy_src="${MIHOMO_STRATEGY_INPUT_FILE:-$MIHOMO_STRATEGY_FILE}"
+    if [ "$_strategy_mode" = "subscription" ]; then
+        if [ -n "${_strategy_src:-}" ] && [ -f "$_strategy_src" ] && mihomo_lib_strategy_valid "$_strategy_src"; then
+            _tmp_cut="$(mktemp "$_compose_tmp_dir/comp_cut.XXXXXX" 2>/dev/null || mktemp /tmp/comp_cut.XXXXXX)"
+            awk '
+              BEGIN {
+                  target_regex = "^(proxy-providers|proxy-groups|rule-providers|sub-rules|rules)[ \t]*:"
+                  top_regex = "^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:"
+                  skip = 0
+              }
+              $0 ~ target_regex {
+                  skip = 1
+                  next
+              }
+              skip {
+                  if ($0 ~ top_regex) {
+                      if ($0 ~ target_regex) {
+                          skip = 1
+                          next
+                      } else {
+                          skip = 0
+                          print
+                          next
+                      }
+                  }
+                  next
+              }
+              { print }
+            ' "$_tmp_step1" > "$_tmp_cut"
+
+            _tmp_inj="$(mktemp "$_compose_tmp_dir/comp_inj.XXXXXX" 2>/dev/null || mktemp /tmp/comp_inj.XXXXXX)"
+            awk -v rules_file="$_rules_src" '
+              /^rules:[ \t]*/ {
+                  print
+                  while ((getline rline < rules_file) > 0) {
+                      if (rline ~ /^[ \t]*$/) continue
+                      if (rline ~ /^[ \t]*#/) { print "  " rline } else { print "  - " rline }
+                  }
+                  close(rules_file)
+                  print "  - GEOSITE,private,DIRECT"
+                  next
+              }
+              { print }
+            ' "$_strategy_src" > "$_tmp_inj"
+
+            cat "$_tmp_cut" "$_tmp_inj" > "$_tmp_step1"
+            rm -f "$_tmp_cut" "$_tmp_inj"
+
+            MIHOMO_COMPOSE_STRATEGY_USED="subscription"
+            MIHOMO_COMPOSE_STRATEGY_GROUPS="$(mihomo_lib_count_block_items "$_strategy_src" proxy-groups)"
+            MIHOMO_COMPOSE_STRATEGY_RULES="$(mihomo_lib_count_block_items "$_strategy_src" rules)"
+        else
+            echo "提示：未找到可用的订阅策略组缓存，本次使用插件模板" >&2
+            MIHOMO_COMPOSE_STRATEGY_USED="template"
+            MIHOMO_COMPOSE_STRATEGY_GROUPS="$(mihomo_lib_count_block_items "$MIHOMO_TEMPLATE_FILE" proxy-groups)"
+            MIHOMO_COMPOSE_STRATEGY_RULES="$(mihomo_lib_count_block_items "$MIHOMO_TEMPLATE_FILE" rules)"
+        fi
+    else
+        MIHOMO_COMPOSE_STRATEGY_USED="template"
+        MIHOMO_COMPOSE_STRATEGY_GROUPS="$(mihomo_lib_count_block_items "$MIHOMO_TEMPLATE_FILE" proxy-groups)"
+        MIHOMO_COMPOSE_STRATEGY_RULES="$(mihomo_lib_count_block_items "$MIHOMO_TEMPLATE_FILE" rules)"
+    fi
+
     # 解析 Secret
     _secret=""
     if [ -n "${mihomo_secret:-}" ]; then
@@ -387,9 +616,25 @@ mihomo_lib_status_write() {
     _nodes="${2:-0}"
     _hash="${3:-}"
     _msg="${4:-}"
+    _strat="${5:-template}"
+    _groups="${6:-0}"
+    _rules="${7:-0}"
 
     case "$_nodes" in
         ''|*[!0-9]*) _nodes=0 ;;
+    esac
+
+    case "$_strat" in
+        subscription|template) ;;
+        *) _strat="template" ;;
+    esac
+
+    case "$_groups" in
+        ''|*[!0-9]*) _groups=0 ;;
+    esac
+
+    case "$_rules" in
+        ''|*[!0-9]*) _rules=0 ;;
     esac
 
     _clean_res="$(printf '%s' "$_res" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -401,8 +646,8 @@ mihomo_lib_status_write() {
     _tmp_status="$(mktemp "$_status_dir/status.XXXXXX" 2>/dev/null || mktemp /tmp/status.XXXXXX)" || return 1
     _now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-    printf '{"time":"%s","result":"%s","nodes":%d,"cache_sha256":"%s","message":"%s"}\n' \
-        "$_now" "$_clean_res" "$_nodes" "$_clean_hash" "$_clean_msg" > "$_tmp_status"
+    printf '{"time":"%s","result":"%s","nodes":%d,"cache_sha256":"%s","message":"%s","strategy":"%s","groups":%d,"rules":%d}\n' \
+        "$_now" "$_clean_res" "$_nodes" "$_clean_hash" "$_clean_msg" "$_strat" "$_groups" "$_rules" > "$_tmp_status"
     chmod 0644 "$_tmp_status" 2>/dev/null || true
     mv -f "$_tmp_status" "$MIHOMO_STATUS_FILE"
 }

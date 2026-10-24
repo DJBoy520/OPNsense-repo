@@ -77,6 +77,17 @@ grep -q "log_limit" "$LOGS_VOLT" || fail "logs.volt missing limit selector"
 grep -q "chk_auto_scroll" "$LOGS_VOLT" || fail "logs.volt missing auto scroll checkbox"
 grep -q "log_conn_status" "$LOGS_VOLT" || fail "logs.volt missing connection status indicator"
 
+# 样式类名正向断言
+grep -q "mihomo-log-view" "$LOGS_VOLT" || fail "logs.volt missing mihomo-log-view class"
+grep -q "mihomo-log-table" "$LOGS_VOLT" || fail "logs.volt missing mihomo-log-table class"
+
+# 亮色主题：严禁深色控制台色值
+for dark_color in "#1e1e1e" "#2d2d2d" "#dcdcdc" "#2e2e2e"; do
+    if grep -q "$dark_color" "$LOGS_VOLT"; then
+        fail "logs.volt contains dark theme color: $dark_color"
+    fi
+done
+
 # 级别徽章 (debug / info / warning / error)
 grep -q "label-info" "$LOGS_VOLT" || fail "logs.volt missing info badge"
 grep -q "label-warning" "$LOGS_VOLT" || fail "logs.volt missing warning badge"

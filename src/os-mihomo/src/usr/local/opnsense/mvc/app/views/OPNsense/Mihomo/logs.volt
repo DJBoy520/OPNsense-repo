@@ -3,78 +3,82 @@
  # All rights reserved.
  #}
 
-<div class="content-box" style="padding-bottom: 1.5em;">
-    <div class="col-xs-12">
-        <h2>{{ lang._('Mihomo - Live Log Viewer') }}</h2>
-        <p class="text-muted">{{ lang._('Real-time filtered logs from Mihomo core daemon with sensitive credential masking.') }}</p>
-        <hr/>
-    </div>
+{{ partial('OPNsense/Mihomo/styles') }}
 
-    <!-- 顶部控件栏 -->
-    <div class="col-xs-12 form-inline" style="margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
-        <div class="form-group">
-            <label for="log_level_filter" style="margin-right: 6px;">{{ lang._('Log Level Filter:') }}</label>
-            <select id="log_level_filter" class="selectpicker" data-width="130px">
-                <option value="all" selected>{{ lang._('All Levels') }}</option>
-                <option value="debug">Debug</option>
-                <option value="info">Info</option>
-                <option value="warning">Warning</option>
-                <option value="error">Error</option>
-            </select>
+<div class="mihomo-page">
+    <div class="content-box" style="padding-bottom: 1.5em;">
+        <div class="col-xs-12">
+            <h2 class="mihomo-card-title">{{ lang._('实时日志') }}</h2>
+            <p class="text-muted">{{ lang._('实时展示 Mihomo 核心守护进程日志，敏感凭据已自动脱敏。') }}</p>
+            <hr/>
         </div>
 
-        <div class="form-group">
-            <label for="log_limit" style="margin-right: 6px;">{{ lang._('Lines:') }}</label>
-            <select id="log_limit" class="selectpicker" data-width="90px">
-                <option value="100">100</option>
-                <option value="200" selected>200</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-                <option value="2000">2000</option>
-            </select>
+        <!-- 顶部控件栏 -->
+        <div class="col-xs-12 mihomo-toolbar form-inline" style="margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
+            <div class="form-group">
+                <label for="log_level_filter" style="margin-right: 6px;">{{ lang._('日志级别') }}：</label>
+                <select id="log_level_filter" class="selectpicker" data-width="130px">
+                    <option value="all" selected>{{ lang._('全部级别') }}</option>
+                    <option value="debug">{{ lang._('调试') }}</option>
+                    <option value="info">{{ lang._('信息') }}</option>
+                    <option value="warning">{{ lang._('警告') }}</option>
+                    <option value="error">{{ lang._('错误') }}</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="log_limit" style="margin-right: 6px;">{{ lang._('行数') }}：</label>
+                <select id="log_limit" class="selectpicker" data-width="90px">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                    <option value="1000">1000</option>
+                    <option value="2000">2000</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <button class="btn btn-default" id="btn_toggle_pause" type="button" title="{{ lang._('暂停 / 继续轮询') }}">
+                    <i class="fa fa-pause" id="icon_toggle_pause"></i> <span id="text_toggle_pause">{{ lang._('暂停') }}</span>
+                </button>
+                <button class="btn btn-default" id="btn_clear_logs" type="button" title="{{ lang._('清空屏幕日志') }}">
+                    <i class="fa fa-trash-o"></i> {{ lang._('清屏') }}
+                </button>
+                <button class="btn btn-default" id="btn_download_logs" type="button" title="{{ lang._('下载原始日志') }}">
+                    <i class="fa fa-download"></i> {{ lang._('下载') }}
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label style="font-weight: normal; margin-bottom: 0; cursor: pointer;">
+                    <input type="checkbox" id="chk_auto_scroll" checked> {{ lang._('自动滚动') }}
+                </label>
+            </div>
+
+            <!-- 状态指示徽章 -->
+            <div class="form-group" style="margin-left: auto;">
+                <span id="log_conn_status" class="label label-success" style="font-size: 12px; padding: 5px 10px;">
+                    <i class="fa fa-circle" style="font-size: 9px; vertical-align: middle; margin-right: 4px;"></i><span id="log_conn_text">{{ lang._('实时') }}</span>
+                </span>
+            </div>
         </div>
 
-        <div class="form-group">
-            <button class="btn btn-default" id="btn_toggle_pause" type="button" title="{{ lang._('Pause/Resume polling') }}">
-                <i class="fa fa-pause" id="icon_toggle_pause"></i> <span id="text_toggle_pause">{{ lang._('Pause') }}</span>
-            </button>
-            <button class="btn btn-default" id="btn_clear_logs" type="button" title="{{ lang._('Clear screen') }}">
-                <i class="fa fa-trash-o"></i> {{ lang._('Clear') }}
-            </button>
-            <button class="btn btn-default" id="btn_download_logs" type="button" title="{{ lang._('Download raw logs') }}">
-                <i class="fa fa-download"></i> {{ lang._('Download') }}
-            </button>
-        </div>
-
-        <div class="form-group">
-            <label style="font-weight: normal; margin-bottom: 0; cursor: pointer;">
-                <input type="checkbox" id="chk_auto_scroll" checked> {{ lang._('Auto Scroll') }}
-            </label>
-        </div>
-
-        <!-- 状态指示徽章 -->
-        <div class="form-group" style="margin-left: auto;">
-            <span id="log_conn_status" class="label label-success" style="font-size: 12px; padding: 5px 10px;">
-                <i class="fa fa-circle" style="font-size: 9px; vertical-align: middle; margin-right: 4px;"></i><span id="log_conn_text">{{ lang._('Live') }}</span>
-            </span>
-        </div>
-    </div>
-
-    <!-- 表格化滚动区 -->
-    <div class="col-xs-12">
-        <div id="log_container" style="height: 600px; overflow-y: auto; overflow-x: hidden; background-color: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 0;">
-            <table class="table table-condensed" style="margin-bottom: 0; width: 100%; border-collapse: collapse; font-family: Menlo, Monaco, Consolas, 'Courier New', monospace; font-size: 12px;">
-                <thead>
-                    <tr style="background-color: #2d2d2d; color: #aaa; border-bottom: 2px solid #444; position: sticky; top: 0; z-index: 2;">
-                        <th style="width: 175px; min-width: 175px; padding: 6px 10px; border: none;">{{ lang._('Time') }}</th>
-                        <th style="width: 80px; min-width: 80px; padding: 6px 8px; border: none; text-align: center;">{{ lang._('Level') }}</th>
-                        <th style="padding: 6px 10px; border: none;">{{ lang._('Message') }}</th>
-                    </tr>
-                </thead>
-                <tbody id="log_table_body">
-                    <!-- 日志动态插入 -->
-                </tbody>
-            </table>
+        <!-- 表格化滚动区 -->
+        <div class="col-xs-12">
+            <div id="log_container" class="mihomo-log-view" style="height: 600px; overflow-y: auto; overflow-x: hidden;">
+                <table class="table table-condensed mihomo-log-table" style="margin-bottom: 0; width: 100%;">
+                    <thead>
+                        <tr>
+                            <th class="mihomo-log-time" style="width: 175px; min-width: 175px;">{{ lang._('时间') }}</th>
+                            <th class="mihomo-log-level" style="width: 80px; min-width: 80px; text-align: center;">{{ lang._('级别') }}</th>
+                            <th class="mihomo-log-msg">{{ lang._('消息') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="log_table_body">
+                        <!-- 日志动态插入 -->
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -103,17 +107,17 @@ $(function () {
     function updateConnStatus(state, extra) {
         if (state === 'live') {
             $connStatus.removeClass('label-warning label-danger label-default').addClass('label-success');
-            $connText.text('{{ lang._("Live") }}');
+            $connText.text('{{ lang._("实时") }}');
         } else if (state === 'paused') {
             $connStatus.removeClass('label-success label-danger label-warning').addClass('label-default');
-            $connText.text('{{ lang._("Paused") }}');
+            $connText.text('{{ lang._("已暂停") }}');
         } else if (state === 'error') {
             $connStatus.removeClass('label-success label-default label-warning').addClass('label-danger');
-            $connText.text(extra || '{{ lang._("Read Error") }}');
+            $connText.text(extra || '{{ lang._("连接中断") }}');
         } else if (state === 'reconnecting') {
             $connStatus.removeClass('label-success label-default label-danger').addClass('label-warning');
             var delaySec = Math.round(extra / 1000);
-            $connText.text('{{ lang._("Reconnecting") }} (' + delaySec + 's)');
+            $connText.text('{{ lang._("重连中") }} (' + delaySec + 's)');
         }
     }
 
@@ -138,87 +142,54 @@ $(function () {
     function createBadge(level) {
         var $badge = $('<span></span>').addClass('label');
         var lvl = (level || '').toLowerCase();
-        $badge.text(lvl.toUpperCase());
 
         if (lvl === 'debug') {
-            $badge.addClass('label-default').css({
-                'background-color': '#555',
-                'color': '#eee',
-                'font-size': '10px',
-                'padding': '2px 6px'
-            });
+            $badge.addClass('label-default').text('调试');
         } else if (lvl === 'info') {
-            $badge.addClass('label-info').css({
-                'background-color': '#337ab7',
-                'color': '#fff',
-                'font-size': '10px',
-                'padding': '2px 6px'
-            });
+            $badge.addClass('label-info').text('信息');
         } else if (lvl === 'warning' || lvl === 'warn') {
-            $badge.addClass('label-warning').css({
-                'background-color': '#f0ad4e',
-                'color': '#fff',
-                'font-size': '10px',
-                'padding': '2px 6px'
-            });
+            $badge.addClass('label-warning').text('警告');
         } else if (lvl === 'error' || lvl === 'fatal') {
-            $badge.addClass('label-danger').css({
-                'background-color': '#d9534f',
-                'color': '#fff',
-                'font-size': '10px',
-                'padding': '2px 6px'
-            });
+            $badge.addClass('label-danger').text(lvl === 'fatal' ? '致命' : '错误');
         } else {
-            $badge.addClass('label-default').css({
-                'background-color': '#777',
-                'color': '#eee',
-                'font-size': '10px',
-                'padding': '2px 6px'
-            });
+            $badge.addClass('label-default').text(lvl ? lvl.toUpperCase() : '-');
         }
         return $badge;
     }
 
     function appendEntry(entry) {
-        var $tr = $('<tr></tr>').css({
-            'border-bottom': '1px solid #2e2e2e',
-            'color': '#dcdcdc'
-        });
+        var $tr = $('<tr></tr>');
 
         if (entry.raw !== undefined) {
             // 解析失败整行放 raw 字段
             var $tdRaw = $('<td></td>')
                 .attr('colspan', '3')
+                .addClass('mihomo-log-msg mihomo-mono')
                 .css({
-                    'padding': '4px 10px',
                     'white-space': 'pre-wrap',
-                    'word-break': 'break-all',
-                    'color': '#bbb'
+                    'word-break': 'break-all'
                 })
                 .text(entry.raw);
             $tr.append($tdRaw);
         } else {
             // 结构化条目: time, level, msg
             var $tdTime = $('<td></td>')
-                .css({
-                    'padding': '4px 10px',
-                    'white-space': 'nowrap',
-                    'color': '#888',
-                    'vertical-align': 'top'
-                })
+                .addClass('mihomo-log-time mihomo-nowrap')
+                .css('vertical-align', 'top')
                 .text(formatTime(entry.time));
 
             var $tdLevel = $('<td></td>')
+                .addClass('mihomo-log-level')
+                .attr('data-level', entry.level ? String(entry.level).toUpperCase() : '')
                 .css({
-                    'padding': '4px 8px',
                     'text-align': 'center',
                     'vertical-align': 'top'
                 })
                 .append(createBadge(entry.level));
 
             var $tdMsg = $('<td></td>')
+                .addClass('mihomo-log-msg mihomo-mono')
                 .css({
-                    'padding': '4px 10px',
                     'white-space': 'pre-wrap',
                     'word-break': 'break-all',
                     'vertical-align': 'top'
@@ -292,7 +263,7 @@ $(function () {
                 schedulePoll(2000);
             } else if (data && data.status === 'failed') {
                 // 服务端明确返回读取失败（如无权限读取日志）
-                updateConnStatus('error', data.message || '{{ lang._("Read Error") }}');
+                updateConnStatus('error', data.message || '{{ lang._("连接中断") }}');
                 handlePollFailure();
             } else {
                 handlePollFailure();
@@ -318,7 +289,7 @@ $(function () {
         if (isPaused) {
             isPaused = false;
             $iconPause.removeClass('fa-play').addClass('fa-pause');
-            $textPause.text('{{ lang._("Pause") }}');
+            $textPause.text('{{ lang._("暂停") }}');
             updateConnStatus('live');
             retryDelay = 2000;
             pollLogs();
@@ -326,7 +297,7 @@ $(function () {
             isPaused = true;
             clearTimeout(pollTimer);
             $iconPause.removeClass('fa-pause').addClass('fa-play');
-            $textPause.text('{{ lang._("Resume") }}');
+            $textPause.text('{{ lang._("继续") }}');
             updateConnStatus('paused');
         }
     });
@@ -346,7 +317,7 @@ $(function () {
                 lines.push($tds.text());
             } else if ($tds.length === 3) {
                 var t = $($tds[0]).text();
-                var l = $($tds[1]).text().trim();
+                var l = $($tds[1]).attr('data-level') || $($tds[1]).text().trim();
                 var m = $($tds[2]).text();
                 lines.push('[' + t + '] [' + l + '] ' + m);
             }
